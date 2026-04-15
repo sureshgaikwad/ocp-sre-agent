@@ -1,0 +1,63 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.application_name }}-cluster-reader
+  labels:
+    app: {{ .Values.application_name }}
+rules:
+  # ClusterOperators (OpenShift platform health)
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusteroperators"]
+    verbs: ["get", "list", "watch"]
+
+  # MachineConfigPools (node configuration)
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["machineconfigpools", "machineconfigs"]
+    verbs: ["get", "list", "watch"]
+
+  # Events (across all namespaces)
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+  # Pods (across all namespaces - read only)
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Services and Endpoints (for route diagnostics)
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+
+  # Routes (OpenShift)
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes", "routes/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Nodes (for node health monitoring)
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # ConfigMaps and Secrets metadata (not data) for diagnostics
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+    # Note: Not reading secret data, only metadata for diagnostics
+
+  # Deployments, StatefulSets, DaemonSets (for context)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+
+  # PersistentVolumeClaims (for storage diagnostics)
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]

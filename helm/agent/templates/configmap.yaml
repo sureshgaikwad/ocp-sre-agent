@@ -1,0 +1,69 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  # LiteLLM Configuration
+  LITELLM_URL: {{ .Values.agentConfig.litellm_url }}
+  LITELLM_API_KEY: {{ .Values.agentConfig.litellm_api_key }}
+  LITELLM_MODEL: {{ .Values.agentConfig.litellm_model }}
+
+  # MCP Configuration
+  MCP_OPENSHIFT_URL: {{ .Values.agentConfig.mcp_openshift_url }}
+  MCP_OPENSHIFT_TRANSPORT: {{ .Values.agentConfig.mcp_openshift_transport }}
+  MCP_GITEA_URL: {{ .Values.agentConfig.mcp_gitea_url }}
+  MCP_GITEA_USER: {{ .Values.agentConfig.mcp_gitea_user }}
+  MCP_GITEA_REPO: {{ .Values.agentConfig.mcp_gitea_repo }}
+  MCP_GITEA_TRANSPORT: {{ .Values.agentConfig.mcp_gitea_transport }}
+
+  # Application Configuration
+  PORT: "{{ .Values.agentConfig.port }}"
+
+  # Phase 2: SRE Agent Configuration
+  MODE: {{ .Values.agentConfig.mode | default "reactive" | quote }}
+  AUDIT_STORAGE: {{ .Values.agentConfig.audit_storage | default "sqlite" | quote }}
+  AUDIT_DB_PATH: {{ .Values.agentConfig.audit_db_path | default "/data/audit.db" | quote }}
+
+  # Collection Intervals (seconds)
+  EVENT_COLLECTION_INTERVAL: {{ .Values.agentConfig.event_collection_interval | default "60" | quote }}
+  CLUSTER_OPERATOR_INTERVAL: {{ .Values.agentConfig.cluster_operator_interval | default "120" | quote }}
+  MACHINE_CONFIG_POOL_INTERVAL: {{ .Values.agentConfig.machine_config_pool_interval | default "300" | quote }}
+  POD_COLLECTION_INTERVAL: {{ .Values.agentConfig.pod_collection_interval | default "30" | quote }}
+  ROUTE_COLLECTION_INTERVAL: {{ .Values.agentConfig.route_collection_interval | default "60" | quote }}
+  BUILD_COLLECTION_INTERVAL: {{ .Values.agentConfig.build_collection_interval | default "45" | quote }}
+  NETWORKING_COLLECTION_INTERVAL: {{ .Values.agentConfig.networking_collection_interval | default "120" | quote }}
+  AUTOSCALING_COLLECTION_INTERVAL: {{ .Values.agentConfig.autoscaling_collection_interval | default "90" | quote }}
+  PROACTIVE_COLLECTION_INTERVAL: {{ .Values.agentConfig.proactive_collection_interval | default "300" | quote }}
+
+  # Phase 4: Proactive & Intelligent Features
+  PROMETHEUS_URL: {{ .Values.agentConfig.prometheus_url | default "" | quote }}
+  PROMETHEUS_ENABLED: {{ .Values.agentConfig.prometheus_enabled | default "false" | quote }}
+  KNOWLEDGE_BASE_ENABLED: {{ .Values.agentConfig.knowledge_base_enabled | default "true" | quote }}
+  KNOWLEDGE_DB_PATH: {{ .Values.agentConfig.knowledge_db_path | default "/data/knowledge.db" | quote }}
+  TREND_LOOKBACK_HOURS: {{ .Values.agentConfig.trend_lookback_hours | default "24" | quote }}
+  ANOMALY_THRESHOLD_STD: {{ .Values.agentConfig.anomaly_threshold_std | default "3.0" | quote }}
+  PROACTIVE_MEMORY_THRESHOLD_PERCENT: {{ .Values.agentConfig.proactive_memory_threshold_percent | default "80.0" | quote }}
+  PROACTIVE_CPU_THRESHOLD_PERCENT: {{ .Values.agentConfig.proactive_cpu_threshold_percent | default "80.0" | quote }}
+
+  # Tier Enables
+  ENABLE_TIER1_AUTO: {{ .Values.agentConfig.enable_tier1_auto | default "true" | quote }}
+  ENABLE_TIER2_GITOPS: {{ .Values.agentConfig.enable_tier2_gitops | default "true" | quote }}
+  ENABLE_TIER3_NOTIFY: {{ .Values.agentConfig.enable_tier3_notify | default "true" | quote }}
+
+  # Remediation Configuration
+  REMEDIATION_COOLDOWN_MINUTES: {{ .Values.agentConfig.remediation_cooldown_minutes | default "30" | quote }}
+  MAX_REMEDIATION_ATTEMPTS: {{ .Values.agentConfig.max_remediation_attempts | default "3" | quote }}
+
+  # RBAC Configuration
+  SERVICE_ACCOUNT: {{ .Values.application_name | quote }}
+  RBAC_CHECK_ENABLED: {{ .Values.agentConfig.rbac_check_enabled | default "true" | quote }}
+
+  # Logging
+  LOG_LEVEL: {{ .Values.agentConfig.log_level | default "INFO" | quote }}
+
+  # Security
+  SECRET_SCRUBBING_ENABLED: {{ .Values.agentConfig.secret_scrubbing_enabled | default "true" | quote }}

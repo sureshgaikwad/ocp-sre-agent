@@ -1,0 +1,101 @@
+# Demo Scenario 3: CrashLoopBackOff with Application Error
+#
+# This pod exits immediately with a clear error message,
+# allowing the SRE agent to demonstrate log analysis via MCP tools.
+#
+# Expected Agent Behavior:
+# 1. EventCollector detects "BackOff" Warning events
+# 2. PodCollector detects CrashLoopBackOff state
+# 3. CrashloopAnalyzer calls MCP tool 'pods_log' to get container logs
+# 4. LLM analyzes error message: "Database connection failed"
+# 5. Diagnosis: "Application configuration error"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-test
+  namespace: sre-demo
+  labels:
+    app: crashloop-test
+    scenario: "crashloop"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop-test
+  template:
+    metadata:
+      labels:
+        app: crashloop-test
+    spec:
+      containers:
+      - name: failing-app
+        image: busybox:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "====================================="
+          echo "Application Startup Failed"
+          echo "====================================="
+          echo ""
+          echo "ERROR: Failed to connect to database"
+          echo "  Host: postgresql.production.svc.cluster.local"
+          echo "  Port: 5432"
+          echo "  Error: connection refused (ECONNREFUSED)"
+          echo ""
+          echo "CRITICAL: Database not available!"
+          echo "  Application cannot start without database connection"
+          echo "  Please verify:"
+          echo "    1. Database service is running"
+          echo "    2. Network policies allow connection"
+          echo "    3. Database credentials are correct"
+          echo ""
+          echo "Exiting with code 1..."
+
+          # Exit with error
+          exit 1
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crashloop-test-info
+  namespace: sre-demo
+data:
+  description: |
+    CrashLoopBackOff Demo Scenario
+
+    This pod exits immediately with exit code 1 and a clear error message
+    about database connectivity.
+
+    The agent should:
+    1. Detect CrashLoopBackOff state
+    2. Use MCP 'pods_log' tool to fetch container logs
+    3. Parse error: "Database not available"
+    4. Classify as APPLICATION_ERROR (not OOM, not SCC)
+
+    Expected Timeline:
+    - T+5s: Pod starts and exits immediately
+    - T+10s: First restart (BackOff: 10s)
+    - T+25s: Second restart (BackOff: 20s)
+    - T+30s: SRE Agent detects Warning event "BackOff"
+    - T+45s: SRE Agent calls MCP pods_log tool
+    - T+60s: SRE Agent creates diagnosis with log excerpt
+
+    Verification:
+      oc get pods -n sre-demo -l app=crashloop-test
+      # Should show: STATUS: CrashLoopBackOff, RESTARTS: 3+
+
+      oc logs -n sre-demo -l app=crashloop-test
+      # Should show: "CRITICAL: Database not available!"
+
+      oc logs -n sre-agent deployment/sre-agent -c agent | grep "pods_log"
+      # Should show: MCP tool call to get logs

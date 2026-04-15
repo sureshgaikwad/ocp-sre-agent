@@ -1,0 +1,433 @@
+# OpenShift SRE Agent - Complete Deployment Manifest
+# Version: 2.0.1 (Phase 4)
+#
+# This file contains all resources needed to deploy the SRE Agent.
+# Users can deploy without access to source code.
+#
+# Prerequisites:
+# 1. Update LITELLM_URL and LITELLM_MODEL in ConfigMap (line 50-51)
+# 2. Update LITELLM_API_KEY in Secret (line 20)
+# 3. Update GITEA_* values in Secret (lines 23-25) if using Gitea
+# 4. Update image reference (line 317) if using external registry
+#
+# Deploy:
+#   oc apply -f sre-agent-deployment.yaml
+#
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-api-secret
+  namespace: sre-agent
+type: Opaque
+stringData:
+  # For OpenShift AI / vLLM: Use "local-model-no-auth"
+  # For OpenAI: Use your API key "sk-..."
+  # For Anthropic: Use your API key "sk-ant-..."
+  LITELLM_API_KEY: "local-model-no-auth"  # UPDATE THIS
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-api-secret
+  namespace: sre-agent
+type: Opaque
+stringData:
+  # Git Platform Token - UPDATE THIS based on your platform
+  # For GitHub: Personal Access Token (PAT) with 'repo' scope
+  # For GitLab: Personal Access Token with 'api' scope
+  # For Gitea: API token
+  GIT_TOKEN: "placeholder-configure-later"  # UPDATE THIS
+
+  # Legacy Gitea support (kept for backward compatibility)
+  GITEA_API_TOKEN: "placeholder-configure-later"
+  GITEA_USER: "sre-agent"
+  GITEA_REPO: "cluster-issues"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  namespace: sre-agent
+data:
+  # ============================================
+  # LiteLLM Configuration - UPDATE THESE VALUES
+  # ============================================
+  # For OpenShift AI with vLLM:
+  #   LITELLM_URL: "http://qwen-25-7b-predictor.models.svc.cluster.local/v1"
+  #   LITELLM_MODEL: "qwen-25-7b"
+  # For OpenAI:
+  #   LITELLM_URL: "https://api.openai.com/v1"
+  #   LITELLM_MODEL: "gpt-4"
+  # For Anthropic:
+  #   LITELLM_URL: "https://api.anthropic.com/v1"
+  #   LITELLM_MODEL: "claude-3-sonnet-20240229"
+  LITELLM_URL: "http://qwen-25-7b-predictor.models.svc.cluster.local/v1"  # UPDATE THIS
+  LITELLM_MODEL: "qwen-25-7b"  # UPDATE THIS
+
+  # MCP Configuration - OpenShift MCP server running as sidecar
+  MCP_OPENSHIFT_URL: "http://localhost:3000"
+  MCP_OPENSHIFT_TRANSPORT: "http"
+  MCP_GITEA_URL: "http://localhost:3001"
+  MCP_GITEA_USER: "sre-agent"
+  MCP_GITEA_REPO: "cluster-issues"
+  MCP_GITEA_TRANSPORT: "http"
+
+  # ============================================
+  # Git Platform Configuration - UPDATE THESE
+  # ============================================
+  # Platform: github, gitlab, gitea
+  GIT_PLATFORM: "github"  # OPTIONS: github, gitlab, gitea
+
+  # For GitHub (public):
+  GIT_SERVER_URL: "https://github.com"
+  # For GitHub Enterprise:
+  # GIT_SERVER_URL: "https://github.company.com"
+
+  # For GitLab (public):
+  # GIT_SERVER_URL: "https://gitlab.com"
+  # For GitLab (self-hosted):
+  # GIT_SERVER_URL: "https://gitlab.company.com"
+
+  # For Gitea:
+  # GIT_SERVER_URL: "https://gitea.example.com"
+
+  # Organization and Repository
+  GIT_ORGANIZATION: "my-org"  # UPDATE: Your GitHub/GitLab org or Gitea owner
+  GIT_REPOSITORY: "cluster-issues"  # UPDATE: Repository name for issues/PRs
+  GIT_DEFAULT_BRANCH: "main"  # Default branch for PRs (main or master)
+
+  # Application Configuration
+  PORT: "8000"
+
+  # Audit Configuration
+  AUDIT_STORAGE: "sqlite"
+  AUDIT_DB_PATH: "/data/audit.db"
+
+  # Note: Workflow execution is triggered via CronJob calling /trigger-workflow
+  # See sre-agent-cronjob.yaml for scheduled execution configuration
+  # The intervals below are informational only - actual execution is CronJob-driven
+
+  # Phase 4: Proactive & Intelligent Features
+  PROMETHEUS_URL: "http://prometheus-k8s.openshift-monitoring.svc:9090"
+  PROMETHEUS_ENABLED: "true"
+  KNOWLEDGE_BASE_ENABLED: "true"
+  KNOWLEDGE_DB_PATH: "/data/knowledge.db"
+  TREND_LOOKBACK_HOURS: "24"
+  ANOMALY_THRESHOLD_STD: "3.0"
+  PROACTIVE_MEMORY_THRESHOLD_PERCENT: "80.0"
+  PROACTIVE_CPU_THRESHOLD_PERCENT: "80.0"
+  INCIDENT_SIMILARITY_THRESHOLD: "0.85"
+
+  # Tier Enables
+  ENABLE_TIER1_AUTO: "true"
+  ENABLE_TIER2_GITOPS: "true"
+  ENABLE_TIER3_NOTIFY: "true"
+
+  # Remediation Configuration
+  REMEDIATION_COOLDOWN_MINUTES: "30"
+  MAX_REMEDIATION_ATTEMPTS: "3"
+
+  # RBAC Configuration
+  RBAC_CHECK_ENABLED: "true"
+
+  # Logging
+  LOG_LEVEL: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR
+
+  # Security
+  SECRET_SCRUBBING_ENABLED: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-agent
+  namespace: sre-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sre-agent-cluster-reader
+rules:
+# ClusterOperators (OpenShift)
+- apiGroups: ["config.openshift.io"]
+  resources: ["clusteroperators", "clusterversions"]
+  verbs: ["get", "list", "watch"]
+# MachineConfigPools (OpenShift)
+- apiGroups: ["machineconfiguration.openshift.io"]
+  resources: ["machineconfigpools", "machineconfigs"]
+  verbs: ["get", "list", "watch"]
+# Routes (OpenShift)
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "watch"]
+# Builds (OpenShift/Tekton)
+- apiGroups: ["build.openshift.io"]
+  resources: ["builds", "buildconfigs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["tekton.dev"]
+  resources: ["pipelineruns", "taskruns"]
+  verbs: ["get", "list", "watch"]
+# Core Resources
+- apiGroups: [""]
+  resources:
+  - events
+  - pods
+  - pods/log
+  - services
+  - endpoints
+  - nodes
+  - persistentvolumeclaims
+  - namespaces
+  verbs: ["get", "list", "watch"]
+# Networking
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies", "ingresses"]
+  verbs: ["get", "list", "watch"]
+# Autoscaling
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling.openshift.io"]
+  resources: ["clusterautoscalers", "machineautoscalers"]
+  verbs: ["get", "list", "watch"]
+# Apps
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-agent-cluster-reader-binding
+subjects:
+- kind: ServiceAccount
+  name: sre-agent
+  namespace: sre-agent
+roleRef:
+  kind: ClusterRole
+  name: sre-agent-cluster-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-agent-prometheus-view
+subjects:
+- kind: ServiceAccount
+  name: sre-agent
+  namespace: sre-agent
+roleRef:
+  kind: ClusterRole
+  name: cluster-monitoring-view
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-agent-edit
+  namespace: sre-agent
+subjects:
+- kind: ServiceAccount
+  name: sre-agent
+  namespace: sre-agent
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sre-agent-data
+  namespace: sre-agent
+  labels:
+    app: sre-agent
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # Uncomment and update if using specific storage class
+  # storageClassName: gp3-csi  # For AWS/ROSA
+  # storageClassName: managed-premium  # For Azure
+  # storageClassName: standard-rwo  # For GCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-agent
+  namespace: sre-agent
+  labels:
+    app: sre-agent
+    version: "2.0.3"
+  annotations:
+    description: "OpenShift SRE Agent - Autonomous monitoring with Kubernetes Python Client"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sre-agent
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: sre-agent
+        version: "2.0.3"
+    spec:
+      serviceAccountName: sre-agent
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: agent
+        # ============================================
+        # Image: Version 2.0.3 with Kubernetes Python Client
+        # ============================================
+        image: quay.io/sureshgaikwad/ocp-sre-agent:3.0.0-amd64
+        # For internal OpenShift registry:
+        # image: image-registry.openshift-image-registry.svc:5000/sre-agent/ocp-sre-agent:2.0.2
+        # For Docker Hub:
+        # image: docker.io/sureshgaikwad/ocp-sre-agent:2.0.2
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: agent-config
+        - secretRef:
+            name: litellm-api-secret
+        - secretRef:
+            name: git-api-secret
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+      # MCP Server sidecar - provides cluster action tools for remediation
+      - name: mcp-server
+        image: quay.io/sureshgaikwad/ocp-mcp:v1.0.0-amd64
+        imagePullPolicy: Always
+        args:
+        - "--stateless"
+        - "--port=8081"
+        - "--inference-port=8082"
+        - "--toolsets=core,tekton,observability"
+        ports:
+        - containerPort: 8081
+          name: mcp
+          protocol: TCP
+        - containerPort: 8082
+          name: inference
+          protocol: TCP
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          value: kubernetes.default.svc
+        - name: KUBERNETES_SERVICE_PORT
+          value: "443"
+        resources:
+          requests:
+            memory: "96Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          tcpSocket:
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sre-agent-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-agent
+  namespace: sre-agent
+  labels:
+    app: sre-agent
+spec:
+  selector:
+    app: sre-agent
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: sre-agent
+  namespace: sre-agent
+  labels:
+    app: sre-agent
+  annotations:
+    description: "SRE Agent web interface and API"
+spec:
+  to:
+    kind: Service
+    name: sre-agent
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

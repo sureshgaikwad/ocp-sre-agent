@@ -1,0 +1,93 @@
+---
+# SRE Agent Workflow Trigger CronJob
+# Runs every 30 seconds to trigger the SRE workflow execution
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sre-agent-trigger
+  namespace: sre-agent
+  labels:
+    app: sre-agent
+    component: trigger
+spec:
+  # Run every minute (Kubernetes CronJobs minimum interval)
+  # For 30s intervals, we rely on the Job taking ~30s to complete
+  schedule: "* * * * *"
+
+  # Keep last 3 successful and 1 failed job for debugging
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+  # Don't allow concurrent workflow executions
+  concurrencyPolicy: Forbid
+
+  # If a job misses its scheduled time (e.g., CronJob controller was down),
+  # don't try to run all missed jobs at once
+  startingDeadlineSeconds: 200
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: sre-agent
+        component: trigger
+    spec:
+      # Clean up completed jobs after 60 seconds
+      ttlSecondsAfterFinished: 60
+
+      # Don't retry failed jobs - next CronJob run will retry
+      backoffLimit: 0
+
+      template:
+        metadata:
+          labels:
+            app: sre-agent
+            component: trigger
+        spec:
+          restartPolicy: Never
+
+          # Use the same service account as the main agent
+          serviceAccountName: sre-agent
+
+          containers:
+          - name: trigger
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              echo "$(date '+%Y-%m-%d %H:%M:%S') - Triggering SRE workflow..."
+
+              # Call the trigger-workflow endpoint
+              RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+                -H "Content-Type: application/json" \
+                -m 120 \
+                http://sre-agent:8000/trigger-workflow)
+
+              HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+              BODY=$(echo "$RESPONSE" | head -n-1)
+
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ Workflow triggered successfully"
+                echo "$BODY" | grep -o '"observations":[0-9]*' || true
+                echo "$BODY" | grep -o '"diagnoses":[0-9]*' || true
+                echo "$BODY" | grep -o '"remediations":[0-9]*' || true
+                exit 0
+              else
+                echo "❌ Workflow trigger failed (HTTP $HTTP_CODE)"
+                echo "$BODY"
+                exit 1
+              fi
+
+            resources:
+              requests:
+                cpu: "10m"
+                memory: "16Mi"
+              limits:
+                cpu: "50m"
+                memory: "32Mi"
+
+            # Set timeout to 2 minutes (120 seconds)
+            # This allows the workflow to complete even under load
+            env:
+            - name: CURL_TIMEOUT
+              value: "120"

@@ -1,0 +1,104 @@
+# Demo Scenario 2: HPA at Maximum Replicas
+#
+# This creates an HPA with a very low max (2 replicas) that will
+# quickly reach its capacity, triggering the SRE agent's autoscaling detector.
+#
+# Expected Agent Behavior:
+# 1. AutoscalingCollector detects HPA with currentReplicas=maxReplicas
+# 2. Analyzer identifies capacity constraint
+# 3. Diagnosis: "HPA at maximum capacity"
+# 4. Recommendation: Increase maxReplicas to allow more scaling
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-test
+  namespace: sre-demo
+  labels:
+    app: hpa-test
+    scenario: "hpa-max"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpa-test
+  template:
+    metadata:
+      labels:
+        app: hpa-test
+    spec:
+      containers:
+      - name: cpu-burner
+        image: busybox:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "HPA Test - Simulating high CPU load"
+          # Continuous CPU burn to trigger HPA scaling
+          while true; do
+            echo "Burning CPU..." > /dev/null
+          done
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-test
+  namespace: sre-demo
+  labels:
+    scenario: "hpa-max"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hpa-test
+  minReplicas: 1
+  maxReplicas: 2  # Intentionally low to hit capacity quickly
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50  # Low threshold to trigger scaling faster
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Scale up immediately
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hpa-test-info
+  namespace: sre-demo
+data:
+  description: |
+    HPA at Maximum Replicas Demo
+
+    This HPA has:
+    - minReplicas: 1
+    - maxReplicas: 2 (intentionally low)
+    - Target CPU: 50%
+
+    The deployment burns CPU continuously, causing HPA to scale to max (2).
+
+    Expected Timeline:
+    - T+0s: 1 replica running at high CPU
+    - T+30s: HPA scales to 2 replicas (max reached)
+    - T+90s: SRE Agent detects HPA at max capacity
+    - T+120s: SRE Agent creates diagnosis
+
+    Verification:
+      oc get hpa -n sre-demo hpa-test
+      # Should show: REPLICAS: 2, MAXPODS: 2
+      oc logs -n sre-agent deployment/sre-agent -c agent | grep -i "hpa.*max"
