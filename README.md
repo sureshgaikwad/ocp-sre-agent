@@ -109,7 +109,7 @@ oc new-project sre-agent
 
 #### Step 2: Configure LLM Settings
 ```bash
-vi deploy/sre-agent-deployment.yaml
+vi agent/agent/deploy/sre-agent-deployment.yaml
 ```
 
 Update the following in the ConfigMap section (lines 47-147):
@@ -148,11 +148,11 @@ ENABLE_TIER2_GITOPS: "true"
 ENABLE_TIER3_NOTIFY: "true"
 ```
 
-See [deploy/GIT_PLATFORM_CONFIGURATION.md](deploy/GIT_PLATFORM_CONFIGURATION.md) for Git setup details.
+See [agent/deploy/GIT_PLATFORM_CONFIGURATION.md](agent/deploy/GIT_PLATFORM_CONFIGURATION.md) for Git setup details.
 
 #### Step 4: Deploy to Cluster
 ```bash
-oc apply -f deploy/sre-agent-deployment.yaml
+oc apply -f agent/deploy/sre-agent-deployment.yaml
 ```
 
 #### Step 5: Verify Deployment
@@ -184,6 +184,9 @@ cd ocp-sre-agent
 
 #### Step 2: Build Container Image
 ```bash
+# Navigate to agent directory
+cd agent/
+
 # Build for AMD64 (most common)
 podman build -t quay.io/YOUR_USERNAME/ocp-sre-agent:3.0.10-amd64 \
   --platform linux/amd64 \
@@ -206,7 +209,7 @@ podman push quay.io/YOUR_USERNAME/ocp-sre-agent:3.0.10-amd64
 
 #### Step 4: Update Deployment Manifest
 ```bash
-vi deploy/sre-agent-deployment.yaml
+vi agent/deploy/sre-agent-deployment.yaml
 ```
 
 Change image reference (around line 186):
@@ -219,7 +222,7 @@ containers:
 #### Step 5: Deploy
 ```bash
 oc new-project sre-agent
-oc apply -f deploy/sre-agent-deployment.yaml
+oc apply -f agent/deploy/sre-agent-deployment.yaml
 ```
 
 ---
@@ -231,7 +234,7 @@ oc apply -f deploy/sre-agent-deployment.yaml
 The demo creates 3 test deployments with known issues:
 
 ```bash
-cd demo/
+cd agent/demo/
 
 # Deploy test scenarios (OOMKilled, CrashLoop, ImagePullBackOff)
 ./run-demo.sh
@@ -242,7 +245,7 @@ cd demo/
 ./verify-demo.sh
 ```
 
-See [demo/README.md](demo/README.md) for detailed demo walkthrough.
+See [agent/demo/README.md](agent/demo/README.md) for detailed demo walkthrough.
 
 ### View Kubernetes Events
 
@@ -317,7 +320,7 @@ oc exec -n sre-agent deployment/sre-agent -c agent -- sqlite3 /data/audit.db \
 
 ## ⚙️ Configuration
 
-All configuration is in [deploy/sre-agent-deployment.yaml](deploy/sre-agent-deployment.yaml).
+All configuration is in [agent/deploy/sre-agent-deployment.yaml](agent/deploy/sre-agent-deployment.yaml).
 
 ### Key Settings (ConfigMap, lines 47-147)
 
@@ -535,23 +538,28 @@ LITELLM_TIMEOUT: "120"  # seconds
 ## 📁 Repository Structure
 
 ```
-agent/
+/
 ├── README.md                          # This file
-├── Dockerfile                         # Container image definition
-├── requirements.txt                   # Python dependencies
-├── main.py                            # FastAPI entry point
-├── mcp_client.py                      # MCP tool registry client
+├── README.adoc.old                    # Old README (archived)
+├── .gitignore
+├── helm/                              # Helm charts (legacy)
 │
-├── deploy/
-│   ├── sre-agent-deployment.yaml      # ⭐ Main Kubernetes manifest
-│   └── GIT_PLATFORM_CONFIGURATION.md  # Git integration guide
-│
-├── demo/
-│   ├── README.md                      # Demo walkthrough
-│   ├── run-demo.sh                    # Deploy test scenarios
-│   └── verify-demo.sh                 # Verify agent responses
-│
-└── sre_agent/                         # Source code
+└── agent/                             # Main SRE Agent application
+    ├── Dockerfile                     # Container image definition
+    ├── requirements.txt               # Python dependencies
+    ├── main.py                        # FastAPI entry point
+    ├── mcp_client.py                  # MCP tool registry client
+    │
+    ├── deploy/
+    │   ├── sre-agent-deployment.yaml  # ⭐ Main Kubernetes manifest
+    │   └── GIT_PLATFORM_CONFIGURATION.md  # Git integration guide
+    │
+    ├── demo/
+    │   ├── README.md                  # Demo walkthrough
+    │   ├── run-demo.sh                # Deploy test scenarios
+    │   └── verify-demo.sh             # Verify agent responses
+    │
+    └── sre_agent/                     # Source code
     ├── collectors/                    # 9 observation collectors
     │   ├── base.py
     │   ├── event_collector.py
@@ -716,11 +724,11 @@ A: Yes. Edit handlers in `sre_agent/handlers/` and rebuild the image.
 **Upgrade steps**:
 ```bash
 # 1. Update deployment manifest image tag
-vi deploy/sre-agent-deployment.yaml
+vi agent/deploy/sre-agent-deployment.yaml
 # Change: image: quay.io/sureshgaikwad/ocp-sre-agent:3.0.10-amd64
 
 # 2. Apply updated manifest
-oc apply -f deploy/sre-agent-deployment.yaml
+oc apply -f agent/deploy/sre-agent-deployment.yaml
 
 # 3. Scale down old pods
 oc scale rs <old-replicaset> --replicas=0 -n sre-agent
