@@ -159,15 +159,18 @@ class Tier3NotificationHandler(BaseHandler):
                 resource_name = diagnosis.evidence.get("pod_name") or diagnosis.evidence.get("resource_name", "cluster")
                 resource_kind = diagnosis.evidence.get("resource_kind", "Pod")
 
-                # Build actionable remediation steps
-                remediation_steps = "\n".join([f"  {i+1}. {action}" for i, action in enumerate(diagnosis.recommended_actions)])
+                # Build enriched event message with full diagnostic reasoning
+                enriched_message = self._build_enriched_event_message(
+                    diagnosis=diagnosis,
+                    git_configured=False
+                )
 
                 await event_creator.create_remediation_event(
                     namespace=namespace,
                     resource_name=resource_name,
                     resource_kind=resource_kind,
                     action="ManualInterventionRequired",
-                    result=f"⚠️ SRE Agent detected {diagnosis.category.value} but cannot auto-fix.\n\nRecommended actions:\n{remediation_steps}\n\nRoot cause: {diagnosis.root_cause}",
+                    result=enriched_message,
                     success=False
                 )
 
@@ -208,15 +211,18 @@ class Tier3NotificationHandler(BaseHandler):
                 resource_name = diagnosis.evidence.get("pod_name") or diagnosis.evidence.get("resource_name", "cluster")
                 resource_kind = diagnosis.evidence.get("resource_kind", "Pod")
 
-                # Build actionable remediation steps
-                remediation_steps = "\n".join([f"  {i+1}. {action}" for i, action in enumerate(diagnosis.recommended_actions)])
+                # Build enriched event message with full diagnostic reasoning
+                enriched_message = self._build_enriched_event_message(
+                    diagnosis=diagnosis,
+                    issue_url=issue_url
+                )
 
                 await event_creator.create_remediation_event(
                     namespace=namespace,
                     resource_name=resource_name,
                     resource_kind=resource_kind,
                     action="IssueCreated",
-                    result=f"📋 SRE Agent detected {diagnosis.category.value} - requires manual investigation.\n\nIssue created: {issue_url}\n\nRecommended actions:\n{remediation_steps}",
+                    result=enriched_message,
                     success=True
                 )
 
@@ -253,15 +259,18 @@ class Tier3NotificationHandler(BaseHandler):
             resource_name = diagnosis.evidence.get("pod_name") or diagnosis.evidence.get("resource_name", "cluster")
             resource_kind = diagnosis.evidence.get("resource_kind", "Pod")
 
-            # Build actionable remediation steps
-            remediation_steps = "\n".join([f"  {i+1}. {action}" for i, action in enumerate(diagnosis.recommended_actions)])
+            # Build enriched event message with full diagnostic reasoning
+            enriched_message = self._build_enriched_event_message(
+                diagnosis=diagnosis,
+                failure_reason=str(e)
+            )
 
             await event_creator.create_remediation_event(
                 namespace=namespace,
                 resource_name=resource_name,
                 resource_kind=resource_kind,
                 action="NotificationFailed",
-                result=f"❌ SRE Agent detected {diagnosis.category.value} but failed to create issue: {str(e)}\n\nRecommended actions:\n{remediation_steps}\n\nRoot cause: {diagnosis.root_cause}",
+                result=enriched_message,
                 success=False
             )
 
@@ -270,6 +279,214 @@ class Tier3NotificationHandler(BaseHandler):
         result.execution_time_seconds = (end_time - start_time).total_seconds()
 
         return result
+
+    def _build_enriched_event_message(
+        self,
+        diagnosis: Diagnosis,
+        issue_url: str = None,
+        failure_reason: str = None,
+        git_configured: bool = True
+    ) -> str:
+        """
+        Build enriched event message with full diagnostic reasoning.
+
+        Args:
+            diagnosis: The diagnosis object
+            issue_url: Optional issue URL if issue was created
+            failure_reason: Optional failure reason if issue creation failed
+            git_configured: Whether Git is configured
+
+        Returns:
+            Enriched event message with detection, analysis, and remediation logic
+        """
+        # Header
+        message = f"⚠️ SRE Agent detected {diagnosis.category.value.replace('_', ' ').title()}\n\n"
+
+        # 1. DETECTION: How the problem was discovered
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "🔍 DETECTION\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += f"Analyzer: {diagnosis.analyzer_name}\n"
+        message += f"Category: {diagnosis.category.value}\n"
+        message += f"Confidence: {diagnosis.confidence.value.upper()}\n"
+        message += f"Timestamp: {diagnosis.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+
+        if diagnosis.error_patterns:
+            message += f"\nError Patterns Matched:\n"
+            for pattern in diagnosis.error_patterns:
+                message += f"  • {pattern}\n"
+
+        # 2. ANALYSIS: Diagnostic steps and evidence
+        message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "🔬 ANALYSIS & EVIDENCE\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        # Show key evidence based on diagnosis type
+        evidence = diagnosis.evidence
+
+        if diagnosis.category == DiagnosisCategory.IMAGE_PULL_BACKOFF_AUTH:
+            message += "Registry: Authentication failure\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Detected ImagePullBackOff error\n"
+            message += "  2. Matched 401/403 error patterns in events\n"
+            message += "  3. Determined this is a credentials issue\n"
+
+        elif diagnosis.category == DiagnosisCategory.IMAGE_PULL_BACKOFF_NOT_FOUND:
+            message += "Registry: Image not found (404)\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Detected ImagePullBackOff error\n"
+            message += "  2. Matched 404 error patterns in events\n"
+            message += "  3. Determined image does not exist in registry\n"
+
+        elif diagnosis.category == DiagnosisCategory.NODE_DISK_PRESSURE:
+            message += "Node: Disk pressure detected\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Monitored node conditions\n"
+            message += "  2. Detected DiskPressure condition = True\n"
+            message += "  3. Analyzed disk usage patterns\n"
+
+        elif diagnosis.category == DiagnosisCategory.CLUSTER_OPERATOR_DEGRADED:
+            message += f"Cluster Operator: {evidence.get('operator_name', 'N/A')}\n"
+            message += f"Status: Degraded\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Checked ClusterOperator status conditions\n"
+            message += "  2. Found Degraded=True or Available=False\n"
+            message += "  3. Determined platform component needs attention\n"
+
+        elif diagnosis.category == DiagnosisCategory.HPA_UNABLE_TO_GET_METRICS:
+            message += "HPA cannot fetch metrics from metrics-server\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Checked HPA conditions for metrics availability\n"
+            message += "  2. Matched error patterns for metrics-server failures\n"
+            message += "  3. Verified this is a metrics infrastructure issue\n"
+
+        elif diagnosis.category == DiagnosisCategory.HPA_MISSING_SCALEREF:
+            message += f"Scale Target: {evidence.get('target_kind', 'N/A')}/{evidence.get('target_name', 'N/A')}\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. HPA references a non-existent resource\n"
+            message += "  2. Checked if deployment/statefulset was deleted\n"
+            message += "  3. Determined HPA configuration needs update\n"
+
+        elif diagnosis.category == DiagnosisCategory.APPLICATION_ERROR:
+            message += "Application crashed due to code error\n"
+            if evidence.get('exit_code'):
+                message += f"Exit Code: {evidence.get('exit_code')}\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Analyzed container logs for error patterns\n"
+            message += "  2. Detected application-level exceptions/crashes\n"
+            message += "  3. Determined root cause is in application code\n"
+
+        else:
+            # Generic evidence display
+            key_evidence = [k for k in evidence.keys() if k not in ['namespace', 'resource_name', 'resource_kind']]
+            if key_evidence:
+                message += "Key Evidence:\n"
+                for key in key_evidence[:5]:  # Limit to 5 items
+                    value = evidence[key]
+                    # Truncate long values
+                    if isinstance(value, str) and len(value) > 100:
+                        value = value[:100] + "..."
+                    message += f"  • {key}: {value}\n"
+
+        # 3. DIAGNOSIS: Root cause conclusion
+        message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "💡 DIAGNOSIS\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += f"Root Cause: {diagnosis.root_cause}\n"
+
+        # 4. REMEDIATION LOGIC: Why specific solutions are recommended
+        message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "🔧 REMEDIATION RECOMMENDATIONS\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        # Explain why Tier 3 (Notification) approach
+        message += f"Remediation Tier: {diagnosis.recommended_tier} (Notification)\n\n"
+        message += "Why Manual Intervention Required:\n"
+        message += "  • Issue requires human judgment or expertise\n"
+        message += "  • Cannot be safely automated\n"
+        message += "  • May require external system changes\n"
+        message += "  • Needs domain-specific knowledge\n\n"
+
+        # Primary recommendations
+        message += "Recommended Actions (in priority order):\n"
+        for i, action in enumerate(diagnosis.recommended_actions, 1):
+            message += f"  {i}. {action}\n"
+
+        # Explain why these specific actions
+        message += "\nRemediation Logic:\n"
+
+        if diagnosis.category == DiagnosisCategory.IMAGE_PULL_BACKOFF_AUTH:
+            message += "  • Fix image pull secret credentials\n"
+            message += "  • Alternatives:\n"
+            message += "    - Make registry public: Security risk\n"
+            message += "    - Use different registry: May not have image\n"
+            message += "  • Why fix credentials: Maintains security while enabling access\n"
+
+        elif diagnosis.category == DiagnosisCategory.IMAGE_PULL_BACKOFF_NOT_FOUND:
+            message += "  • Verify image tag exists in registry\n"
+            message += "  • Alternatives:\n"
+            message += "    - Build missing image: If it should exist\n"
+            message += "    - Update deployment to use correct tag\n"
+            message += "  • Why verify first: Avoid deploying wrong version\n"
+
+        elif diagnosis.category == DiagnosisCategory.NODE_DISK_PRESSURE:
+            message += "  • Clean up unused images and stopped containers\n"
+            message += "  • Identify and remove large log files\n"
+            message += "  • Alternatives:\n"
+            message += "    - Add more storage: Costly\n"
+            message += "    - Cordon and drain node: Disruptive\n"
+            message += "  • Why cleanup first: Non-disruptive quick fix\n"
+
+        elif diagnosis.category == DiagnosisCategory.CLUSTER_OPERATOR_DEGRADED:
+            message += "  • Check operator logs for specific errors\n"
+            message += "  • Review operator conditions and status\n"
+            message += "  • Alternatives:\n"
+            message += "    - Restart operator: May not fix root cause\n"
+            message += "    - Ignore if not critical: Risky\n"
+            message += "  • Why investigate first: Platform issues need careful diagnosis\n"
+
+        elif diagnosis.category == DiagnosisCategory.APPLICATION_ERROR:
+            message += "  • Review application logs for stack traces\n"
+            message += "  • Identify and fix code bugs\n"
+            message += "  • Alternatives:\n"
+            message += "    - Rollback to previous version: Temporary fix\n"
+            message += "    - Add error handling: Masks root cause\n"
+            message += "  • Why fix code: Permanent resolution\n"
+
+        elif diagnosis.category == DiagnosisCategory.HPA_UNABLE_TO_GET_METRICS:
+            message += "  • Fix metrics-server deployment\n"
+            message += "  • Verify pod has resource requests defined\n"
+            message += "  • Alternatives:\n"
+            message += "    - Disable HPA: Loses autoscaling benefit\n"
+            message += "    - Use custom metrics: More complex\n"
+            message += "  • Why fix metrics-server: Required for resource-based HPA\n"
+
+        # Add issue URL if created
+        if issue_url:
+            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "📋 TRACKING\n"
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"Issue created: {issue_url}\n"
+            message += "Please review and take action.\n"
+
+        # Add failure reason if issue creation failed
+        if failure_reason:
+            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "❌ NOTIFICATION STATUS\n"
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"Failed to create issue: {failure_reason}\n"
+            message += "Please take manual action.\n"
+
+        # Add note if Git not configured
+        if not git_configured:
+            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "⚙️ CONFIGURATION NOTE\n"
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "Git integration not configured.\n"
+            message += "Configure GIT_TOKEN, GIT_ORGANIZATION, and GIT_REPOSITORY\n"
+            message += "to enable automatic issue creation.\n"
+
+        return message
 
     async def _create_issue(self, diagnosis: Diagnosis) -> str:
         """

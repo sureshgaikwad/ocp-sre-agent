@@ -20,9 +20,11 @@ from sre_agent.models.remediation import RemediationResult
 from sre_agent.utils.json_logger import get_logger
 from sre_agent.utils.audit_logger import get_audit_logger, OperationType
 from sre_agent.utils.event_creator import get_event_creator
+from sre_agent.utils.event_deduplicator import get_event_deduplicator
 from sre_agent.config.settings import get_settings
 from sre_agent.knowledge.incident_store import get_knowledge_store
 from sre_agent.orchestrator.alert_correlator import AlertCorrelator
+from sre_agent.integrations.slack_notifier import get_slack_notifier
 
 logger = get_logger(__name__)
 
@@ -63,6 +65,12 @@ class WorkflowEngine:
             self.knowledge_store = get_knowledge_store(self.settings.knowledge_db_path)
 
         self.alert_correlator = AlertCorrelator()
+
+        # Event deduplication and noise reduction
+        self.deduplicator = get_event_deduplicator()
+
+        # Slack notifications for interactive remediation
+        self.slack_notifier = get_slack_notifier()
 
     async def initialize(self) -> None:
         """
@@ -524,6 +532,50 @@ class WorkflowEngine:
                 )
                 continue
 
+            # Check if we should alert for this diagnosis (deduplication + noise filtering)
+            should_alert, alert_reason = self.deduplicator.should_alert(diagnosis)
+
+            if should_alert:
+                # Send Slack notification for approval
+                slack_sent = await self.slack_notifier.send_remediation_request(
+                    diagnosis=diagnosis,
+                    reason=alert_reason
+                )
+
+                if slack_sent:
+                    logger.info(
+                        f"Slack remediation request sent",
+                        request_id=request_id,
+                        diagnosis_id=diagnosis.id,
+                        reason=alert_reason
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to send Slack request, creating Kubernetes event",
+                        request_id=request_id,
+                        diagnosis_id=diagnosis.id
+                    )
+                    # Fallback: Create Kubernetes event if Slack fails
+                    await self._create_approval_event(diagnosis, alert_reason)
+
+            # Check if user has approved remediation
+            if not self.deduplicator.is_remediation_requested(diagnosis):
+                logger.info(
+                    f"Remediation not approved yet, waiting for user response",
+                    request_id=request_id,
+                    diagnosis_id=diagnosis.id,
+                    category=diagnosis.category.value
+                )
+                continue
+
+            # User approved - proceed with remediation
+            logger.info(
+                f"User approved remediation, proceeding",
+                request_id=request_id,
+                diagnosis_id=diagnosis.id,
+                category=diagnosis.category.value
+            )
+
             # Find handler that can handle this diagnosis
             for handler in self.handlers:
                 if handler.can_handle(diagnosis):
@@ -550,6 +602,13 @@ class WorkflowEngine:
                             result_summary=remediation.message[:200]
                         )
 
+                        # Send Slack success notification for successful remediations
+                        if remediation.status.value == "success":
+                            await self.slack_notifier.send_remediation_success(
+                                diagnosis=diagnosis,
+                                remediation_result=remediation
+                            )
+
                         # Update cooldown
                         self._update_cooldown(diagnosis)
 
@@ -569,7 +628,68 @@ class WorkflowEngine:
             remediation_count=len(all_remediations)
         )
 
+        # Cleanup old issues from deduplicator
+        self.deduplicator.cleanup_old_issues()
+
         return all_remediations
+
+    async def _create_approval_event(self, diagnosis: Diagnosis, reason: str):
+        """
+        Create Kubernetes Event requesting remediation approval.
+
+        Args:
+            diagnosis: Diagnosis requiring approval
+            reason: Why this alert was triggered
+        """
+        import os
+
+        event_creator = get_event_creator()
+        evidence = diagnosis.evidence
+
+        namespace = evidence.get("namespace", "cluster-wide")
+        resource_name = evidence.get("pod_name") or evidence.get("resource_name", "cluster")
+        resource_kind = evidence.get("resource_kind", "Pod")
+
+        # Get external route URL
+        route_url = os.getenv("SRE_AGENT_ROUTE_URL", "")
+        if not route_url:
+            # Auto-detect if not configured
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["oc", "get", "route", "sre-agent", "-n", "sre-agent", "-o", "jsonpath={.spec.host}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout:
+                    route_url = f"https://{result.stdout.strip()}"
+            except:
+                route_url = "http://sre-agent.sre-agent.svc:8000"  # Fallback to internal
+
+        api_url = route_url or "http://sre-agent.sre-agent.svc:8000"
+
+        # Build approval request message
+        message = f"🤖 SRE Agent Remediation Request\n\n"
+        message += f"Category: {diagnosis.category.value}\n"
+        message += f"Reason: {reason}\n\n"
+        message += f"Root Cause: {diagnosis.root_cause}\n\n"
+        message += f"To approve remediation:\n"
+        message += f"curl -X POST {api_url}/approve-remediation \\\n"
+        message += f"  -H 'Content-Type: application/json' \\\n"
+        message += f"  -d '{{\n"
+        message += f"    \"diagnosis_id\": \"{diagnosis.id}\",\n"
+        message += f"    \"approved\": true\n"
+        message += f"  }}'\n"
+
+        await event_creator.create_remediation_event(
+            namespace=namespace,
+            resource_name=resource_name,
+            resource_kind=resource_kind,
+            action="ApprovalRequired",
+            result=message,
+            success=False
+        )
 
     def _is_in_cooldown(self, diagnosis: Diagnosis) -> bool:
         """

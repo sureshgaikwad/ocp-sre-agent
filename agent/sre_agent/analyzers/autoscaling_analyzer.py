@@ -359,6 +359,17 @@ class AutoscalingAnalyzer(BaseAnalyzer):
         Returns:
             Diagnosis object
         """
+        # Merge observation metadata into evidence for handler use
+        base_evidence = {
+            "namespace": observation.namespace,
+            "resource_name": observation.resource_name,
+            "resource_kind": observation.resource_kind,
+        }
+
+        # Merge custom evidence on top of base evidence
+        if evidence:
+            base_evidence.update(evidence)
+
         return Diagnosis(
             observation_id=observation.id,
             category=category,
@@ -366,6 +377,6 @@ class AutoscalingAnalyzer(BaseAnalyzer):
             confidence=confidence,
             recommended_tier=tier,
             recommended_actions=recommended_actions or [],
-            evidence=evidence or {},
+            evidence=base_evidence,
             analyzer_name=self.analyzer_name
         )

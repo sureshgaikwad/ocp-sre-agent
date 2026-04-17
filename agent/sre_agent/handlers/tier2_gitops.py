@@ -19,6 +19,7 @@ from sre_agent.utils.json_logger import get_logger
 from sre_agent.utils.gitops_detector import get_gitops_detector
 from sre_agent.utils.secret_scrubber import SecretScrubber
 from sre_agent.utils.audit_logger import get_audit_logger, OperationType
+from sre_agent.utils.event_creator import get_event_creator
 from sre_agent.config.settings import get_settings
 from sre_agent.integrations.git.factory import create_git_adapter
 from sre_agent.integrations.git.base import GitPlatformAdapter
@@ -169,11 +170,183 @@ class Tier2GitOpsHandler(BaseHandler):
                 error=str(e)
             )
 
+            # CRITICAL: Create Kubernetes Event with remediation steps even when handler fails
+            # This ensures Slack notifications are sent via event-exporter
+            event_creator = get_event_creator()
+            namespace = diagnosis.evidence.get("namespace", "default")
+            resource_name = diagnosis.evidence.get("pod_name") or diagnosis.evidence.get("resource_name", "unknown")
+            resource_kind = diagnosis.evidence.get("resource_kind", "Pod")
+
+            # Build enriched event message with full diagnostic reasoning
+            enriched_message = self._build_enriched_event_message(
+                diagnosis=diagnosis,
+                failure_reason=str(e)[:200]
+            )
+
+            await event_creator.create_remediation_event(
+                namespace=namespace,
+                resource_name=resource_name,
+                resource_kind=resource_kind,
+                action="ManualFixRequired",
+                result=enriched_message,
+                success=False
+            )
+
         # Calculate execution time
         end_time = datetime.utcnow()
         result.execution_time_seconds = (end_time - start_time).total_seconds()
 
         return result
+
+    def _build_enriched_event_message(
+        self,
+        diagnosis: Diagnosis,
+        failure_reason: str = None
+    ) -> str:
+        """
+        Build enriched event message with full diagnostic reasoning.
+
+        Args:
+            diagnosis: The diagnosis object
+            failure_reason: Optional failure reason if auto-fix failed
+
+        Returns:
+            Enriched event message with detection, analysis, and remediation logic
+        """
+        # Header
+        message = f"⚠️ SRE Agent detected {diagnosis.category.value.replace('_', ' ').title()}\n\n"
+
+        # 1. DETECTION: How the problem was discovered
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "🔍 DETECTION\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += f"Analyzer: {diagnosis.analyzer_name}\n"
+        message += f"Category: {diagnosis.category.value}\n"
+        message += f"Confidence: {diagnosis.confidence.value.upper()}\n"
+        message += f"Timestamp: {diagnosis.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+
+        if diagnosis.error_patterns:
+            message += f"\nError Patterns Matched:\n"
+            for pattern in diagnosis.error_patterns:
+                message += f"  • {pattern}\n"
+
+        # 2. ANALYSIS: Diagnostic steps and evidence
+        message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "🔬 ANALYSIS & EVIDENCE\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        # Show key evidence based on diagnosis type
+        evidence = diagnosis.evidence
+
+        if diagnosis.category == DiagnosisCategory.OOM_KILLED:
+            message += f"Exit Code: {evidence.get('exit_code', 'N/A')}\n"
+            message += f"Reason: {evidence.get('reason', 'N/A')}\n"
+            message += f"Current Memory Limit: {evidence.get('memory_limit', 'N/A')}\n"
+            message += f"Container: {evidence.get('container_name', 'N/A')}\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Detected exit code 137 (OOMKilled)\n"
+            message += "  2. Verified container exceeded memory limit\n"
+            message += "  3. Analyzed resource constraints vs actual usage\n"
+
+        elif diagnosis.category == DiagnosisCategory.RESOURCE_QUOTA_EXCEEDED:
+            message += f"Current Replicas: {evidence.get('current_replicas', 'N/A')}\n"
+            message += f"Maximum Replicas: {evidence.get('max_replicas', 'N/A')}\n"
+            if 'current_metrics' in evidence:
+                message += f"Current Metrics: {evidence.get('current_metrics', 'N/A')}\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. HPA reached maximum replica count\n"
+            message += "  2. Load/metrics still indicate scaling needed\n"
+            message += "  3. Determined maxReplicas is the bottleneck\n"
+
+        elif diagnosis.category == DiagnosisCategory.HPA_UNABLE_TO_GET_METRICS:
+            message += "HPA cannot fetch metrics from metrics-server\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. Checked HPA conditions for metrics availability\n"
+            message += "  2. Matched error patterns for metrics-server failures\n"
+            message += "  3. Verified this is a metrics infrastructure issue\n"
+
+        elif diagnosis.category == DiagnosisCategory.HPA_MISSING_SCALEREF:
+            message += f"Scale Target: {evidence.get('target_kind', 'N/A')}/{evidence.get('target_name', 'N/A')}\n"
+            message += "\nDiagnostic Logic:\n"
+            message += "  1. HPA references a non-existent resource\n"
+            message += "  2. Checked if deployment/statefulset was deleted\n"
+            message += "  3. Determined HPA configuration needs update\n"
+
+        else:
+            # Generic evidence display
+            key_evidence = [k for k in evidence.keys() if k not in ['namespace', 'resource_name', 'resource_kind']]
+            if key_evidence:
+                message += "Key Evidence:\n"
+                for key in key_evidence[:5]:  # Limit to 5 items
+                    value = evidence[key]
+                    # Truncate long values
+                    if isinstance(value, str) and len(value) > 100:
+                        value = value[:100] + "..."
+                    message += f"  • {key}: {value}\n"
+
+        # 3. DIAGNOSIS: Root cause conclusion
+        message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "💡 DIAGNOSIS\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += f"Root Cause: {diagnosis.root_cause}\n"
+
+        # 4. REMEDIATION LOGIC: Why specific solutions are recommended
+        message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += "🔧 REMEDIATION RECOMMENDATIONS\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        # Explain why Tier 2 (GitOps) approach
+        message += f"Remediation Tier: {diagnosis.recommended_tier} (GitOps/PR-based)\n\n"
+        message += "Why This Approach:\n"
+        message += "  • Requires configuration change (not transient issue)\n"
+        message += "  • Change should be tracked in Git for auditability\n"
+        message += "  • Needs review before applying to production\n"
+        message += "  • Can be automated via GitOps PR workflow\n\n"
+
+        # Primary recommendations
+        message += "Recommended Actions (in priority order):\n"
+        for i, action in enumerate(diagnosis.recommended_actions, 1):
+            message += f"  {i}. {action}\n"
+
+        # Explain why these specific actions
+        message += "\nRemediation Logic:\n"
+
+        if diagnosis.category == DiagnosisCategory.OOM_KILLED:
+            message += "  • Increasing memory prevents OOMKilled failures\n"
+            message += "  • Setting memory request ensures proper scheduling\n"
+            message += "  • Alternative: Optimize application (long-term fix)\n"
+            message += "  • Why not vertical autoscaling: Not all clusters support VPA\n"
+
+        elif diagnosis.category == DiagnosisCategory.RESOURCE_QUOTA_EXCEEDED:
+            max_replicas = evidence.get('max_replicas', 1)
+            proposed = max_replicas * 2
+            message += f"  • Doubling maxReplicas ({max_replicas} → {proposed}) allows scaling\n"
+            message += "  • Alternatives considered:\n"
+            message += "    - Vertical scaling (increase pod resources): May hit node limits\n"
+            message += "    - Optimize application: Long-term solution, not immediate\n"
+            message += f"  • Why doubling: Provides headroom for traffic spikes\n"
+
+        elif diagnosis.category == DiagnosisCategory.HPA_UNABLE_TO_GET_METRICS:
+            message += "  • Fixing metrics-server enables HPA to function\n"
+            message += "  • Alternative: Disable HPA (loses autoscaling benefit)\n"
+            message += "  • Why metrics-server: Required for resource-based HPA\n"
+
+        elif diagnosis.category == DiagnosisCategory.LIVENESS_PROBE_FAILURE:
+            message += "  • Adjusting probe timing reduces false positives\n"
+            message += "  • Alternatives:\n"
+            message += "    - Remove probe: Loses health check benefit\n"
+            message += "    - Fix app startup: Long-term solution\n"
+            message += "  • Why adjust timing: Quick fix for slow-starting apps\n"
+
+        # Add failure reason if auto-fix failed
+        if failure_reason:
+            message += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "❌ AUTO-FIX STATUS\n"
+            message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"Auto-fix failed: {failure_reason}\n"
+            message += "Manual intervention required.\n"
+
+        return message
 
     def _determine_proposed_fix(self, diagnosis: Diagnosis) -> dict:
         """

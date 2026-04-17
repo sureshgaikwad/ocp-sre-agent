@@ -171,6 +171,29 @@ oc logs -n sre-agent deployment/sre-agent -c agent | grep "tools available"
 oc exec -n sre-agent deployment/sre-agent -c agent -- curl -s http://localhost:8000/health
 ```
 
+#### Step 6: Verify Cluster-Wide Event Creation
+The agent creates Kubernetes Events in **ANY namespace** where it detects issues:
+
+```bash
+# Verify agent can create events cluster-wide
+oc auth can-i create events --as=system:serviceaccount:sre-agent:sre-agent --all-namespaces
+# Should output: yes
+
+# Create a test issue in any namespace to verify
+oc new-project test-agent
+oc apply -f agent/demo/01-oom-test.yaml -n test-agent
+
+# Wait 1-2 minutes, then check for events
+oc get events -n test-agent | grep SREAgent
+# Should see both detection and remediation events
+```
+
+**Expected Output:**
+```
+Warning   SREAgentOOMKilled           pod/oom-test-xxx    🔍 SRE Agent detected: Pod oom-test-xxx - OOMKilled
+Warning   SREAgentRemediationFailed   deployment/oom-test ❌ SRE Agent remediation: Manual fix required: increase memory from 128Mi to 256Mi
+```
+
 ---
 
 ### Option 2: Build and Deploy Custom Image
@@ -436,10 +459,26 @@ AUDIT_DB_PATH: "/data/audit.db"        # SQLite database path
 - Applied BEFORE logging to audit trail
 - Applied BEFORE creating Git issues
 
-### RBAC Verification
+### RBAC Model
+
+**Cluster-Wide Read + Event Creation:**
+- ClusterRole `sre-agent-cluster-reader` grants read access to all namespaces
+- **Events**: `create`, `patch`, `get`, `list`, `watch` (cluster-wide)
+- **Pods, Services, Deployments, HPAs**: `get`, `list`, `watch` (read-only, cluster-wide)
+- **ClusterOperators, Routes, Builds**: `get`, `list`, `watch` (read-only, cluster-wide)
+
+**Namespace-Scoped Write (Tier 1 Auto-Remediation):**
+- RoleBinding to `edit` role in `sre-agent` namespace only
+- Tier 1 automated fixes (pod restarts, memory increases) work in `sre-agent` namespace
+- For cluster-wide auto-remediation, grant `edit` role per namespace:
+  ```bash
+  oc adm policy add-role-to-user edit system:serviceaccount:sre-agent:sre-agent -n <namespace>
+  ```
+
+**RBAC Verification:**
 - Every Tier 1 action checks permissions first: `oc auth can-i <verb> <resource>`
-- Creates event if RBAC denied: `SREAgentRBACDenied`
-- Never bypasses Kubernetes RBAC
+- If RBAC denied, creates remediation event with manual steps: `SREAgentRemediationFailed`
+- Never bypasses Kubernetes RBAC - respects cluster security policies
 
 ### Audit Logging
 - All observations, diagnoses, and remediations logged to SQLite database

@@ -1,6 +1,8 @@
 # Deployment Guide
 
-Quick deployment instructions for OpenShift SRE Agent v3.0.0 (Watch-Based Real-Time Architecture)
+Quick deployment instructions for OpenShift SRE Agent v3.1.6 (Watch-Based + Lightweight RAG)
+
+> 📖 **Full Documentation**: See [../README.md](../README.md) for comprehensive project details, features, and architecture.
 
 ## Files in This Directory
 
@@ -89,6 +91,38 @@ GIT_TOKEN: "ghp_your_token_here"    # GitHub PAT with 'repo' scope
 ```
 
 See [GIT_PLATFORM_CONFIGURATION.md](GIT_PLATFORM_CONFIGURATION.md) for detailed Git setup.
+
+### Knowledge Base & RAG (Optional)
+
+**Enable RAG Tier 2** for internal runbooks (lines 154-156):
+```yaml
+RAG_ENABLED: "true"                    # Enable lightweight TF-IDF RAG
+REDHAT_KB_SEARCH_ENABLED: "false"      # Enable Tier 3 real-time search (optional)
+```
+
+**Add Internal Runbooks**:
+```bash
+# Copy runbooks to pod
+POD=$(oc get pod -n sre-agent -l app=sre-agent -o name | head -1)
+oc cp /path/to/runbooks/ ${POD}:/data/internal-runbooks/ -c agent
+
+# Index documents
+oc exec -n sre-agent deployment/sre-agent -c agent -- \
+  curl -X POST http://localhost:8000/index-docs
+
+# Verify
+oc exec -n sre-agent deployment/sre-agent -c agent -- \
+  curl -s http://localhost:8000/stats | jq '.kb_retriever.tier2'
+```
+
+**RAG Benefits**:
+- ✅ Zero image overhead (1.38 GB - same as non-RAG)
+- ✅ 30-50ms search latency
+- ✅ 85-90% accuracy with TF-IDF
+- ✅ No ML dependencies (pure Python)
+- ✅ UBI9 compatible
+
+See [../KB_RETRIEVAL.md](../KB_RETRIEVAL.md) and [../RAG_OPTIMIZATION.md](../RAG_OPTIMIZATION.md) for details.
 
 ## What Gets Deployed
 

@@ -45,6 +45,18 @@ stringData:
   GITEA_REPO: "cluster-issues"
 ---
 apiVersion: v1
+kind: Secret
+metadata:
+  name: slack-webhook-secret
+  namespace: sre-agent
+type: Opaque
+stringData:
+  # Slack Webhook URL for interactive remediation
+  # Get this from: https://api.slack.com/messaging/webhooks
+  # Leave empty to disable Slack notifications (will use Kubernetes events only)
+  SLACK_WEBHOOK_URL: ""  # UPDATE THIS with your Slack webhook URL
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: agent-config
@@ -66,12 +78,13 @@ data:
   LITELLM_MODEL: "qwen-25-7b"  # UPDATE THIS
 
   # MCP Configuration - OpenShift MCP server running as sidecar
-  MCP_OPENSHIFT_URL: "http://localhost:3000"
-  MCP_OPENSHIFT_TRANSPORT: "http"
-  MCP_GITEA_URL: "http://localhost:3001"
-  MCP_GITEA_USER: "sre-agent"
-  MCP_GITEA_REPO: "cluster-issues"
-  MCP_GITEA_TRANSPORT: "http"
+  MCP_OPENSHIFT_URL: "http://localhost:8081"
+  MCP_OPENSHIFT_TRANSPORT: "streamable-http"
+  # Gitea MCP server not deployed - leave empty
+  MCP_GITEA_URL: ""
+  MCP_GITEA_USER: ""
+  MCP_GITEA_REPO: ""
+  MCP_GITEA_TRANSPORT: ""
 
   # ============================================
   # Git Platform Configuration - UPDATE THESE
@@ -134,8 +147,26 @@ data:
   # Logging
   LOG_LEVEL: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR
 
+  # ============================================
+  # Knowledge Base Retrieval - Tiered Strategy
+  # ============================================
+  # Tier 2: RAG (Retrieval-Augmented Generation) for internal runbooks
+  RAG_ENABLED: "false"  # Set to "true" to enable RAG internal knowledge search
+  # Tier 3: Real-time Red Hat KB search (with caching)
+  REDHAT_KB_SEARCH_ENABLED: "false"  # Set to "true" to enable real-time KB search
+
   # Security
   SECRET_SCRUBBING_ENABLED: "true"
+
+  # Event Deduplication & Noise Reduction
+  EVENT_PERSISTENCE_THRESHOLD_MINUTES: "5"   # Alert if issue persists for this long
+  EVENT_OCCURRENCE_THRESHOLD: "3"            # Alert if issue occurs this many times
+  EVENT_TTL_MINUTES: "60"                     # How long to remember resolved issues
+
+  # External Route URL for Slack notifications
+  # This will be auto-detected if not set
+  # Format: https://sre-agent-sre-agent.apps.cluster.domain.com
+  SRE_AGENT_ROUTE_URL: ""  # Leave empty for auto-detection
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -167,10 +198,13 @@ rules:
 - apiGroups: ["tekton.dev"]
   resources: ["pipelineruns", "taskruns"]
   verbs: ["get", "list", "watch"]
-# Core Resources
+# Core Resources - Events (need create/patch for cluster-wide event creation)
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+# Core Resources - Read-only access
 - apiGroups: [""]
   resources:
-  - events
   - pods
   - pods/log
   - services
@@ -287,9 +321,9 @@ spec:
       containers:
       - name: agent
         # ============================================
-        # Image: Version 2.0.3 with Kubernetes Python Client
+        # Image: Version 3.1.6 with Lightweight RAG (TF-IDF) + Stats Fix
         # ============================================
-        image: quay.io/sureshgaikwad/ocp-sre-agent:3.0.0-amd64
+        image: quay.io/sureshgaikwad/ocp-sre-agent:3.1.6-amd64
         # For internal OpenShift registry:
         # image: image-registry.openshift-image-registry.svc:5000/sre-agent/ocp-sre-agent:2.0.2
         # For Docker Hub:
@@ -306,6 +340,8 @@ spec:
             name: litellm-api-secret
         - secretRef:
             name: git-api-secret
+        - secretRef:
+            name: slack-webhook-secret
         volumeMounts:
         - name: data
           mountPath: /data

@@ -525,6 +525,112 @@ async def trigger_workflow():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class RemediationApprovalRequest(BaseModel):
+    """Request model for remediation approval."""
+    diagnosis_id: str
+    approved: bool
+
+
+@app.post("/approve-remediation")
+async def approve_remediation(request: RemediationApprovalRequest):
+    """
+    Approve or reject a remediation request.
+
+    When the agent detects an issue, it sends a Slack notification
+    requesting approval. Users respond by calling this endpoint.
+
+    Args:
+        diagnosis_id: The diagnosis ID to approve/reject
+        approved: True to approve, False to reject
+
+    Returns:
+        Confirmation message
+    """
+    if not workflow_engine:
+        raise HTTPException(
+            status_code=503,
+            detail="Workflow engine not initialized"
+        )
+
+    try:
+        from sre_agent.utils.event_deduplicator import get_event_deduplicator
+
+        deduplicator = get_event_deduplicator()
+
+        if request.approved:
+            # Approve remediation
+            success = deduplicator.approve_remediation_by_id(request.diagnosis_id)
+
+            if success:
+                logger.info(
+                    f"Remediation approved by user",
+                    diagnosis_id=request.diagnosis_id
+                )
+
+                return {
+                    "status": "success",
+                    "message": f"✅ Remediation approved for diagnosis {request.diagnosis_id}",
+                    "diagnosis_id": request.diagnosis_id,
+                    "action": "Will remediate on next workflow cycle (within 1 minute)",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Diagnosis ID {request.diagnosis_id} not found. It may have already been processed or is too old."
+                )
+        else:
+            logger.info(
+                f"Remediation rejected by user",
+                diagnosis_id=request.diagnosis_id
+            )
+
+            return {
+                "status": "success",
+                "message": f"❌ Remediation rejected for diagnosis {request.diagnosis_id}",
+                "diagnosis_id": request.diagnosis_id,
+                "action": "No action will be taken. Issue will be monitored for changes.",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    except Exception as e:
+        logger.error(f"Approval processing failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/index-docs")
+async def index_internal_docs():
+    """
+    Index internal documentation for RAG (Tier 2).
+
+    Requires RAG_ENABLED=true in configuration.
+    """
+    try:
+        from sre_agent.knowledge import get_kb_retriever
+
+        kb_retriever = get_kb_retriever()
+
+        if not kb_retriever.rag_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="RAG is not enabled. Set RAG_ENABLED=true in configuration."
+            )
+
+        count = await kb_retriever.index_internal_docs()
+
+        return {
+            "status": "success",
+            "message": f"Indexed {count} document chunks",
+            "chunks_indexed": count
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Document indexing failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
+
+
 @app.get("/stats")
 async def get_stats():
     """
@@ -545,9 +651,9 @@ async def get_stats():
     if workflow_engine:
         stats["workflow_engine"] = workflow_engine.get_stats()
 
-    # Add scheduler stats
-    if scheduler:
-        stats["scheduler"] = scheduler.get_stats()
+    # Add watch manager stats (watch-based mode)
+    if watch_manager:
+        stats["watch_manager"] = watch_manager.get_stats()
 
     # Add audit log stats
     try:
@@ -556,6 +662,14 @@ async def get_stats():
         stats["audit"] = audit_stats
     except Exception as e:
         stats["audit"] = {"error": str(e)}
+
+    # Add KB retriever stats
+    try:
+        from sre_agent.knowledge import get_kb_retriever
+        kb_retriever = get_kb_retriever()
+        stats["kb_retriever"] = kb_retriever.get_stats()
+    except Exception as e:
+        stats["kb_retriever"] = {"error": str(e)}
 
     return stats
 
