@@ -5,10 +5,12 @@
 # Users can deploy without access to source code.
 #
 # Prerequisites:
-# 1. Update LITELLM_URL and LITELLM_MODEL in ConfigMap (line 50-51)
-# 2. Update LITELLM_API_KEY in Secret (line 20)
-# 3. Update GITEA_* values in Secret (lines 23-25) if using Gitea
-# 4. Update image reference (line 317) if using external registry
+# 1. Update LITELLM_URL and LITELLM_MODEL in ConfigMap
+# 2. Update LITELLM_API_KEY in Secret
+# 3. Update GIT_* values in ConfigMap for issue tracking
+# 4. (Optional) Create/update slack-webhook-secret separately - see instructions around line 50
+# 5. (Optional) Update SRE_AGENT_ROUTE_URL in ConfigMap - auto-detected if left empty
+# 6. Update image reference if using external registry
 #
 # Deploy:
 #   oc apply -f sre-agent-deployment.yaml
@@ -44,17 +46,26 @@ stringData:
   GITEA_USER: "sre-agent"
   GITEA_REPO: "cluster-issues"
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: slack-webhook-secret
-  namespace: sre-agent
-type: Opaque
-stringData:
-  # Slack Webhook URL for interactive remediation
-  # Get this from: https://api.slack.com/messaging/webhooks
-  # Leave empty to disable Slack notifications (will use Kubernetes events only)
-  SLACK_WEBHOOK_URL: ""  # UPDATE THIS with your Slack webhook URL
+# ============================================================================
+# IMPORTANT: Slack Webhook Secret (REQUIRED for Slack integration)
+# ============================================================================
+# The slack-webhook-secret is NOT included in this YAML file for security.
+# Create it separately to avoid accidentally committing your webhook URL to git.
+#
+# To create the secret:
+#   oc create secret generic slack-webhook-secret -n sre-agent \
+#     --from-literal=SLACK_WEBHOOK_URL='https://hooks.slack.com/services/YOUR/WEBHOOK/URL'
+#
+# Or to update an existing secret:
+#   oc patch secret slack-webhook-secret -n sre-agent --type merge \
+#     -p '{"stringData":{"SLACK_WEBHOOK_URL":"https://hooks.slack.com/services/YOUR/WEBHOOK/URL"}}'
+#
+# Get your Slack webhook URL from: https://api.slack.com/messaging/webhooks
+#
+# Without this secret, the deployment will fail with CreateContainerConfigError.
+# If you don't want Slack integration, create an empty secret:
+#   oc create secret generic slack-webhook-secret -n sre-agent --from-literal=SLACK_WEBHOOK_URL=''
+# ============================================================================
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -113,6 +124,11 @@ data:
   # Application Configuration
   PORT: "8000"
 
+  # External Route URL for remediation approval (auto-detected if not set)
+  # Example: https://sre-agent-sre-agent.apps.cluster.example.com
+  # If not set, will try to auto-detect from OpenShift route
+  SRE_AGENT_ROUTE_URL: ""  # Leave empty for auto-detection (recommended)
+
   # Audit Configuration
   AUDIT_STORAGE: "sqlite"
   AUDIT_DB_PATH: "/data/audit.db"
@@ -162,11 +178,6 @@ data:
   EVENT_PERSISTENCE_THRESHOLD_MINUTES: "5"   # Alert if issue persists for this long
   EVENT_OCCURRENCE_THRESHOLD: "3"            # Alert if issue occurs this many times
   EVENT_TTL_MINUTES: "60"                     # How long to remember resolved issues
-
-  # External Route URL for Slack notifications
-  # This will be auto-detected if not set
-  # Format: https://sre-agent-sre-agent.apps.cluster.domain.com
-  SRE_AGENT_ROUTE_URL: ""  # Leave empty for auto-detection
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -294,9 +305,9 @@ metadata:
   namespace: sre-agent
   labels:
     app: sre-agent
-    version: "2.0.3"
+    version: "3.1.7"
   annotations:
-    description: "OpenShift SRE Agent - Autonomous monitoring with Kubernetes Python Client"
+    description: "OpenShift SRE Agent - Autonomous monitoring with RBAC fix"
 spec:
   replicas: 1
   selector:
@@ -311,7 +322,7 @@ spec:
     metadata:
       labels:
         app: sre-agent
-        version: "2.0.3"
+        version: "3.1.7"
     spec:
       serviceAccountName: sre-agent
       securityContext:
@@ -321,9 +332,9 @@ spec:
       containers:
       - name: agent
         # ============================================
-        # Image: Version 3.1.6 with Lightweight RAG (TF-IDF) + Stats Fix
+        # Image: Version 3.1.7 with RBAC Fix (Kubernetes SelfSubjectAccessReview API)
         # ============================================
-        image: quay.io/sureshgaikwad/ocp-sre-agent:3.1.6-amd64
+        image: quay.io/sureshgaikwad/ocp-sre-agent:3.1.7-amd64
         # For internal OpenShift registry:
         # image: image-registry.openshift-image-registry.svc:5000/sre-agent/ocp-sre-agent:2.0.2
         # For Docker Hub:

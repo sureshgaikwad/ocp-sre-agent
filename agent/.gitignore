@@ -1,1 +1,16 @@
 __pycache__
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+.DS_Store
+
+# Secret files - never commit
+*secret*.yaml
+*webhook*.txt
+deploy/*-secrets.yaml
+deploy/.env
+
+# Internal documentation - not for public release
+AGENT_DETAILED_ARCHITECTURE.md

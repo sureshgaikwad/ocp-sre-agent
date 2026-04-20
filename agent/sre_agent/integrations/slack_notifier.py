@@ -57,20 +57,44 @@ class SlackNotifier:
             )
 
     def _detect_route_url(self):
-        """Auto-detect external route URL from OpenShift."""
+        """Auto-detect external route URL from OpenShift using Kubernetes API."""
         try:
-            import subprocess
-            result = subprocess.run(
-                ["oc", "get", "route", "sre-agent", "-n", "sre-agent", "-o", "jsonpath={.spec.host}"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0 and result.stdout:
-                self.route_url = f"https://{result.stdout.strip()}"
-                logger.info(f"Auto-detected route URL: {self.route_url}")
+            from kubernetes import client, config
+            from kubernetes.client.rest import ApiException
+
+            # Load in-cluster config
+            try:
+                config.load_incluster_config()
+            except Exception:
+                # Fallback to kubeconfig if not in cluster
+                config.load_kube_config()
+
+            # Use CustomObjectsApi to access OpenShift Route resource
+            api = client.CustomObjectsApi()
+
+            try:
+                route = api.get_namespaced_custom_object(
+                    group="route.openshift.io",
+                    version="v1",
+                    namespace="sre-agent",
+                    plural="routes",
+                    name="sre-agent"
+                )
+
+                # Extract hostname from route spec
+                host = route.get("spec", {}).get("host", "")
+                if host:
+                    self.route_url = f"https://{host}"
+                    logger.info(f"Auto-detected route URL: {self.route_url}")
+                else:
+                    logger.warning("Route found but no host specified")
+            except ApiException as e:
+                if e.status == 404:
+                    logger.warning("Route 'sre-agent' not found in namespace 'sre-agent' - Slack approval URLs will not work")
+                else:
+                    logger.error(f"Failed to get route: {e.status} - {e.reason}")
         except Exception as e:
-            logger.warning(f"Could not auto-detect route URL: {e}")
+            logger.error(f"Could not auto-detect route URL: {e}")
 
     async def send_remediation_request(
         self,
@@ -313,34 +337,56 @@ class SlackNotifier:
         # Note: For full interactivity, you need Slack App with Bot Token
         # For webhook-only mode, we provide manual approval instructions
 
-        # Use external route URL if available, otherwise internal service URL
-        api_url = self.route_url or "http://sre-agent.sre-agent.svc:8000"
+        # Use external route URL - log warning if not available
+        if not self.route_url:
+            logger.warning(
+                "No external route URL configured - curl commands will not work outside cluster. "
+                "Set SRE_AGENT_ROUTE_URL environment variable or ensure route is created."
+            )
+            api_url = "<ROUTE_URL_NOT_CONFIGURED>"
+        else:
+            api_url = self.route_url
 
-        # Single-line curl commands (multi-line doesn't work in Slack)
-        approve_cmd = f"curl -X POST {api_url}/approve-remediation -H 'Content-Type: application/json' -d '{{\"diagnosis_id\": \"{diagnosis.id}\", \"approved\": true}}'"
-        reject_cmd = f"curl -X POST {api_url}/approve-remediation -H 'Content-Type: application/json' -d '{{\"diagnosis_id\": \"{diagnosis.id}\", \"approved\": false}}'"
+        # Generate stable fingerprint (works across agent restarts)
+        from sre_agent.utils.event_deduplicator import get_event_deduplicator
+        deduplicator = get_event_deduplicator()
+        fingerprint = deduplicator._generate_fingerprint(diagnosis)
+
+        # Single-line curl commands with FINGERPRINT (stable across restarts)
+        approve_cmd_fp = f"curl -X POST {api_url}/approve-remediation -H 'Content-Type: application/json' -d '{{\"diagnosis_id\": \"{fingerprint}\", \"approved\": true}}'"
+        reject_cmd_fp = f"curl -X POST {api_url}/approve-remediation -H 'Content-Type: application/json' -d '{{\"diagnosis_id\": \"{fingerprint}\", \"approved\": false}}'"
+
+        approval_text = (
+            f"*✅ To Approve Remediation:*\n"
+            f"```bash\n{approve_cmd_fp}\n```\n"
+            f"\n"
+            f"*❌ To Reject (No Action):*\n"
+            f"```bash\n{reject_cmd_fp}\n```\n"
+            f"\n_💡 Issue ID `{fingerprint}` is stable across agent restarts_"
+        )
+
+        if not self.route_url:
+            approval_text = (
+                "⚠️ *External route URL not configured*\n"
+                "Set `SRE_AGENT_ROUTE_URL` environment variable or ensure OpenShift route exists.\n\n"
+                + approval_text
+            )
 
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": (
-                    f"*✅ To Approve Remediation:*\n"
-                    f"```bash\n{approve_cmd}\n```\n"
-                    f"\n"
-                    f"*❌ To Reject (No Action):*\n"
-                    f"```bash\n{reject_cmd}\n```"
-                )
+                "text": approval_text
             }
         })
 
-        # Footer
+        # Footer with both IDs
         blocks.append({
             "type": "context",
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": f"Diagnosis ID: `{diagnosis.id}` | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                    "text": f"Issue ID: `{fingerprint}` (stable) | Diagnosis ID: `{diagnosis.id}` (ephemeral) | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
                 }
             ]
         })

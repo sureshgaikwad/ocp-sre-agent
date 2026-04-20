@@ -5,12 +5,17 @@ Tracks observations and diagnoses to determine if an issue is:
 - New (never seen before)
 - Transient (seen once, may be temporary)
 - Persistent (seen multiple times or lasted long)
+
+Approvals are persisted to SQLite to survive agent restarts.
 """
 
 import hashlib
+import aiosqlite
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 from dataclasses import dataclass
+from pathlib import Path
 from sre_agent.models.observation import Observation
 from sre_agent.models.diagnosis import Diagnosis
 from sre_agent.utils.json_logger import get_logger
@@ -39,13 +44,16 @@ class EventDeduplicator:
     - Seen for the first time AND high severity
     - Persistent (> 5 minutes)
     - Recurring (> 3 occurrences)
+
+    Approvals are persisted to SQLite to survive agent restarts.
     """
 
     def __init__(
         self,
         persistence_threshold_minutes: int = 5,
         occurrence_threshold: int = 3,
-        ttl_minutes: int = 60
+        ttl_minutes: int = 60,
+        db_path: str = "/data/approvals.db"
     ):
         """
         Initialize EventDeduplicator.
@@ -54,16 +62,85 @@ class EventDeduplicator:
             persistence_threshold_minutes: Issue must persist for this long to alert
             occurrence_threshold: Issue must occur this many times to alert
             ttl_minutes: How long to remember resolved issues
+            db_path: Path to SQLite database for persisting approvals
         """
         self.persistence_threshold = timedelta(minutes=persistence_threshold_minutes)
         self.occurrence_threshold = occurrence_threshold
         self.ttl = timedelta(minutes=ttl_minutes)
+        self.db_path = db_path
 
         # Track issues: fingerprint -> IssueTracker
         self._issues: dict[str, IssueTracker] = {}
 
         # Track diagnosis_id -> fingerprint mapping for approval lookup
         self._diagnosis_id_map: dict[str, str] = {}
+
+        # Initialize database synchronously
+        asyncio.create_task(self._init_db())
+        asyncio.create_task(self._load_approvals())
+
+    async def _init_db(self):
+        """Initialize SQLite database for persisting approvals."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS approvals (
+                        fingerprint TEXT PRIMARY KEY,
+                        category TEXT,
+                        approved INTEGER,
+                        timestamp TEXT
+                    )
+                """)
+                await db.commit()
+                logger.info("Approval database initialized", db_path=self.db_path)
+        except Exception as e:
+            logger.error("Failed to initialize approval database", error=str(e))
+
+    async def _load_approvals(self):
+        """Load all approvals from SQLite on startup."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute("SELECT fingerprint, category FROM approvals WHERE approved = 1") as cursor:
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        fingerprint, category = row
+                        # If we have this issue in memory, mark it as approved
+                        if fingerprint in self._issues:
+                            self._issues[fingerprint].remediation_requested = True
+                            logger.info(
+                                "Loaded approval from database",
+                                fingerprint=fingerprint,
+                                category=category
+                            )
+            if rows:
+                logger.info(f"Loaded {len(rows)} approvals from database")
+        except Exception as e:
+            logger.error("Failed to load approvals from database", error=str(e))
+
+    async def _persist_approval(self, fingerprint: str, category: str, approved: bool):
+        """Persist approval state to SQLite."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """
+                    INSERT OR REPLACE INTO approvals (fingerprint, category, approved, timestamp)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (fingerprint, category, 1 if approved else 0, datetime.utcnow().isoformat())
+                )
+                await db.commit()
+                logger.debug(
+                    "Persisted approval to database",
+                    fingerprint=fingerprint,
+                    category=category,
+                    approved=approved
+                )
+        except Exception as e:
+            logger.error(
+                "Failed to persist approval to database",
+                fingerprint=fingerprint,
+                error=str(e)
+            )
 
     def _generate_fingerprint(self, diagnosis: Diagnosis) -> str:
         """
@@ -211,6 +288,10 @@ class EventDeduplicator:
         fingerprint = self._generate_fingerprint(diagnosis)
         if fingerprint in self._issues:
             self._issues[fingerprint].remediation_requested = True
+            # Persist to database
+            asyncio.create_task(
+                self._persist_approval(fingerprint, diagnosis.category.value, True)
+            )
             logger.info(
                 f"Remediation requested for issue",
                 fingerprint=fingerprint,
@@ -219,18 +300,23 @@ class EventDeduplicator:
 
     def approve_remediation_by_id(self, diagnosis_id: str) -> bool:
         """
-        Approve remediation by diagnosis ID.
+        Approve remediation by diagnosis ID or fingerprint.
 
         Args:
-            diagnosis_id: Diagnosis ID to approve
+            diagnosis_id: Diagnosis ID or fingerprint to approve
 
         Returns:
             True if approved, False if diagnosis not found
         """
+        # Try diagnosis_id first (works if agent hasn't restarted)
         if diagnosis_id in self._diagnosis_id_map:
             fingerprint = self._diagnosis_id_map[diagnosis_id]
             if fingerprint in self._issues:
                 self._issues[fingerprint].remediation_requested = True
+                # Persist to database
+                asyncio.create_task(
+                    self._persist_approval(fingerprint, self._issues[fingerprint].category, True)
+                )
                 logger.info(
                     f"Remediation approved via diagnosis_id",
                     diagnosis_id=diagnosis_id,
@@ -239,8 +325,22 @@ class EventDeduplicator:
                 )
                 return True
 
+        # Try as fingerprint directly (works across agent restarts)
+        if diagnosis_id in self._issues:
+            self._issues[diagnosis_id].remediation_requested = True
+            # Persist to database
+            asyncio.create_task(
+                self._persist_approval(diagnosis_id, self._issues[diagnosis_id].category, True)
+            )
+            logger.info(
+                f"Remediation approved via fingerprint",
+                fingerprint=diagnosis_id,
+                category=self._issues[diagnosis_id].category
+            )
+            return True
+
         logger.warning(
-            f"Cannot approve - diagnosis_id not found",
+            f"Cannot approve - diagnosis_id not found (tried as both diagnosis_id and fingerprint)",
             diagnosis_id=diagnosis_id
         )
         return False
@@ -256,8 +356,42 @@ class EventDeduplicator:
             True if user approved remediation
         """
         fingerprint = self._generate_fingerprint(diagnosis)
+
+        # Check in-memory first
         if fingerprint in self._issues:
-            return self._issues[fingerprint].remediation_requested
+            if self._issues[fingerprint].remediation_requested:
+                return True
+
+        # Check database (in case approval happened before restart)
+        try:
+            # Use sync approach since this is called from sync context
+            import sqlite3
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT approved FROM approvals WHERE fingerprint = ? AND approved = 1",
+                (fingerprint,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                logger.info(
+                    "Found approval in database (survived restart)",
+                    fingerprint=fingerprint,
+                    category=diagnosis.category.value
+                )
+                # Update in-memory state if issue exists
+                if fingerprint in self._issues:
+                    self._issues[fingerprint].remediation_requested = True
+                return True
+        except Exception as e:
+            logger.error(
+                "Failed to check approval in database",
+                fingerprint=fingerprint,
+                error=str(e)
+            )
+
         return False
 
     def cleanup_old_issues(self):
@@ -280,6 +414,25 @@ class EventDeduplicator:
 
         if stale_issues:
             logger.info(f"Cleaned up {len(stale_issues)} stale issues")
+
+        # Clean up old approvals from database (older than 7 days)
+        asyncio.create_task(self._cleanup_old_approvals())
+
+    async def _cleanup_old_approvals(self):
+        """Remove approvals older than 7 days from database."""
+        try:
+            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "DELETE FROM approvals WHERE timestamp < ?",
+                    (cutoff,)
+                )
+                deleted = cursor.rowcount
+                await db.commit()
+                if deleted > 0:
+                    logger.info(f"Cleaned up {deleted} old approvals from database")
+        except Exception as e:
+            logger.error("Failed to clean up old approvals", error=str(e))
 
     def get_stats(self) -> dict:
         """Get deduplicator statistics."""

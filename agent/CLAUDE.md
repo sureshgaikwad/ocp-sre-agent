@@ -26,6 +26,8 @@ podman build -t pipeline-agent -f Containerfile .
 - `MCP_GITEA_TRANSPORT` - Transport type: `sse` or `streamable-http` (default: streamable-http)
 - `MCP_GITEA_OWNER` - Gitea repository owner for issue creation (default: user1)
 - `MCP_GITEA_REPO` - Gitea repository name for issue creation (default: mcp)
+- `SRE_AGENT_ROUTE_URL` - External route URL for remediation approval (e.g., https://sre-agent-sre-agent.apps.cluster.example.com). Auto-detected from OpenShift route if not set.
+- `SLACK_WEBHOOK_URL` - Slack webhook URL for interactive notifications
 - `PORT` - Server port (default: 8000)
 
 ## Architecture

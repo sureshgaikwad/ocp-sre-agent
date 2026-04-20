@@ -118,7 +118,7 @@ class RBACChecker:
         resource_name: Optional[str]
     ) -> bool:
         """
-        Execute oc auth can-i command.
+        Execute RBAC check using Kubernetes SelfSubjectAccessReview API.
 
         Args:
             verb: Action verb
@@ -130,42 +130,69 @@ class RBACChecker:
             True if allowed, False if denied
 
         Raises:
-            Exception: If command execution fails
+            Exception: If API call fails
         """
-        # Build command
-        cmd_parts = ["oc", "auth", "can-i", verb, resource]
+        from kubernetes import client, config
+        from kubernetes.client.rest import ApiException
 
-        if resource_name:
-            cmd_parts.append(resource_name)
-
-        if namespace:
-            cmd_parts.extend(["-n", namespace])
-
-        command = " ".join(cmd_parts)
-
-        # Execute via MCP
-        # Note: Actual MCP tool name depends on OpenShift MCP server implementation
-        # This is a placeholder that should be adapted
-
-        # Option 1: If MCP has 'exec' tool
+        # Load in-cluster config
         try:
-            result = await self.mcp_registry.call_tool("exec", {
-                "command": command
-            })
+            config.load_incluster_config()
         except Exception:
-            # Fallback: Raise NotImplementedError with instructions
-            raise NotImplementedError(
-                f"RBACChecker requires MCP OpenShift server with command execution capability. "
-                f"Expected tool: 'exec' or similar. Command would be: {command}"
+            config.load_kube_config()
+
+        # Create authorization API client
+        auth_api = client.AuthorizationV1Api()
+
+        # Build ResourceAttributes
+        resource_attributes = client.V1ResourceAttributes(
+            verb=verb,
+            resource=resource,
+            namespace=namespace,
+            name=resource_name
+        )
+
+        # Create SelfSubjectAccessReview
+        access_review = client.V1SelfSubjectAccessReview(
+            spec=client.V1SelfSubjectAccessReviewSpec(
+                resource_attributes=resource_attributes
+            )
+        )
+
+        # Execute check
+        try:
+            # Run in thread to avoid blocking
+            import asyncio
+            response = await asyncio.to_thread(
+                auth_api.create_self_subject_access_review,
+                access_review
             )
 
-        # Parse result
-        # oc auth can-i returns:
-        # - "yes" if allowed
-        # - "no" if denied
-        # - exit code 0 for yes, non-zero for no
-        result_lower = result.strip().lower()
-        return result_lower == "yes"
+            # Check if allowed
+            allowed = response.status.allowed
+
+            logger.debug(
+                f"SelfSubjectAccessReview: {verb} {resource} = {allowed}",
+                verb=verb,
+                resource=resource,
+                namespace=namespace,
+                name=resource_name,
+                allowed=allowed,
+                reason=response.status.reason if hasattr(response.status, 'reason') else None
+            )
+
+            return allowed
+
+        except ApiException as e:
+            logger.error(
+                f"SelfSubjectAccessReview failed: {e.status} - {e.reason}",
+                verb=verb,
+                resource=resource,
+                namespace=namespace,
+                exc_info=True
+            )
+            # Fail closed on API errors
+            return False
 
     def _build_cache_key(
         self,

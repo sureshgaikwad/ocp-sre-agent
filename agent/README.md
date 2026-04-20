@@ -401,7 +401,28 @@ KB articles are displayed with tier badges:
 
 ## 🚀 Quick Start
 
-### 1. Deploy to OpenShift
+### Option A: One-Command Deployment (Recommended)
+
+The deployment script automatically detects your cluster's route URL and configures it:
+
+```bash
+# Clone repository
+git clone https://github.com/your-org/openshift-sre-agent.git
+cd openshift-sre-agent/deploy
+
+# Run deployment script (auto-detects route URL)
+./deploy.sh
+```
+
+**What the script does:**
+- ✅ Creates `sre-agent` namespace
+- ✅ Deploys all resources (RBAC, ConfigMaps, Secrets, Deployment, Route)
+- ✅ Auto-detects external route URL dynamically
+- ✅ Updates ConfigMap with cluster-specific route URL
+- ✅ Restarts deployment to apply configuration
+- ✅ Waits for pod to be ready and shows status
+
+### Option B: Manual Deployment
 
 ```bash
 # Create namespace
@@ -409,6 +430,13 @@ oc new-project sre-agent
 
 # Deploy agent
 oc apply -f deploy/sre-agent-deployment.yaml
+
+# Auto-detect and set route URL
+ROUTE_URL="https://$(oc get route sre-agent -n sre-agent -o jsonpath='{.spec.host}')"
+oc patch configmap agent-config -n sre-agent --type merge -p "{\"data\":{\"SRE_AGENT_ROUTE_URL\":\"$ROUTE_URL\"}}"
+
+# Restart to apply changes
+oc rollout restart deployment/sre-agent -n sre-agent
 
 # Wait for pod to be ready
 oc wait --for=condition=Ready pod -l app=sre-agent -n sre-agent --timeout=300s
@@ -474,24 +502,128 @@ oc patch secret git-api-secret -n sre-agent --type merge -p '
 }'
 ```
 
-### 4. Configure Slack (Optional)
+### 4. Configure Slack Integration (Recommended for Interactive Remediation)
 
-```bash
-oc patch secret slack-webhook-secret -n sre-agent --type merge -p '
-{
-  "stringData": {
-    "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-  }
-}'
+Slack integration enables **interactive remediation approval** with rich notifications including:
+- 🔍 Detailed diagnosis with root cause analysis
+- 📊 Evidence and diagnostic steps performed
+- 📚 Relevant Red Hat KB articles
+- ✅ One-click approval/rejection via curl commands
+- 🔧 Manual remediation instructions
+
+**Setup Instructions:**
+
+1. **Create Slack Incoming Webhook:**
+   - Go to https://api.slack.com/messaging/webhooks
+   - Click "Create your Slack app" → Choose "From scratch"
+   - Select workspace and name your app (e.g., "SRE Agent")
+   - Navigate to "Incoming Webhooks" → Enable it
+   - Click "Add New Webhook to Workspace"
+   - Choose your channel (e.g., #sre-alerts)
+   - Copy the webhook URL (looks like: `https://hooks.slack.com/services/T.../B.../...`)
+
+2. **Configure the webhook in OpenShift:**
+   ```bash
+   # Create or update the Slack webhook secret
+   oc create secret generic slack-webhook-secret -n sre-agent \
+     --from-literal=SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL" \
+     --dry-run=client -o yaml | oc apply -f -
+   
+   # Or update existing secret
+   oc patch secret slack-webhook-secret -n sre-agent --type merge -p '
+   {
+     "stringData": {
+       "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+     }
+   }'
+   ```
+
+3. **Verify Slack Integration:**
+   ```bash
+   # Check webhook is configured
+   oc get secret slack-webhook-secret -n sre-agent -o jsonpath='{.data.SLACK_WEBHOOK_URL}' | base64 -d
+   
+   # Check route URL (auto-detected, used for approval links)
+   oc get route sre-agent -n sre-agent -o jsonpath='{.spec.host}'
+   ```
+
+**Approval Workflow:**
+1. Agent detects issue → Sends Slack notification
+2. You review diagnosis in Slack
+3. Copy and run the approval curl command from Slack message
+4. Agent remediates on next workflow cycle (within 1 minute)
+5. Slack receives success notification
+
+**Example Slack Notification:**
+```
+🤖 SRE Agent Remediation Request
+🟠 SRE Agent Alert: Oom Killed
+⏱️ PERSISTENT - Issue lasting > 5 minutes
+
+Resource: test-demo/Pod/memory-hog-648977765d-4lpvd
+Confidence: HIGH
+Analyzer: crashloop_analyzer
+Tier: Tier 1
+
+🔍 Root Cause:
+Container exceeded memory limit (64Mi) and was killed by OOM killer
+
+🔧 Recommended Actions:
+1. Increase memory limit to 256Mi
+2. Restart pod with new limits
+
+✅ To Approve Remediation:
+curl -X POST https://sre-agent-...apps.com/approve-remediation \
+  -H 'Content-Type: application/json' \
+  -d '{"diagnosis_id": "abc123", "approved": true}'
 ```
 
-### 5. Restart Deployment
+**Without Slack**: Agent will still detect and diagnose issues but will require manual remediation or approval via API.
+
+### 5. Grant Namespace Permissions (Optional - Required for Auto-Remediation)
+
+By default, the SRE Agent has **cluster-wide read** permissions but **cannot modify resources** outside the `sre-agent` namespace. To enable automated remediation (Tier 1) in specific namespaces, grant edit permissions:
+
+```bash
+# Grant remediation permissions to a single namespace
+oc adm policy add-role-to-user edit system:serviceaccount:sre-agent:sre-agent -n <namespace>
+
+# Example: Allow auto-remediation in production namespace
+oc adm policy add-role-to-user edit system:serviceaccount:sre-agent:sre-agent -n production
+
+# Grant permissions to multiple namespaces
+for ns in production staging dev; do
+  oc adm policy add-role-to-user edit system:serviceaccount:sre-agent:sre-agent -n $ns
+done
+```
+
+**Security Note**: Only grant edit permissions to namespaces where you trust the agent to perform automated fixes (e.g., increase memory limits, restart pods). The agent performs RBAC pre-checks and will skip remediation if it lacks permissions.
+
+**What the agent can do with edit permissions:**
+- ✅ Increase memory/CPU limits for OOMKilled pods
+- ✅ Patch deployments to fix ImagePullBackOff
+- ✅ Scale HPA maxReplicas when resource quota is exceeded
+- ✅ Restart pods stuck in transient failures
+- ❌ Cannot delete resources (requires admin role)
+- ❌ Cannot modify RBAC (requires cluster-admin)
+
+**To verify permissions:**
+```bash
+# Check if agent can patch deployments in a namespace
+oc auth can-i patch deployment -n <namespace> --as=system:serviceaccount:sre-agent:sre-agent
+
+# View all granted permissions
+oc describe clusterrolebinding sre-agent-cluster-reader-binding
+oc get rolebinding -A | grep sre-agent
+```
+
+### 6. Restart Deployment
 
 ```bash
 oc rollout restart deployment/sre-agent -n sre-agent
 ```
 
-### 6. Verify Installation
+### 7. Verify Installation
 
 ```bash
 # Check pod status
@@ -948,16 +1080,41 @@ oc rollout restart deployment/sre-agent -n sre-agent
 
 ### Slack Notifications Not Sending
 
+**Symptoms**: 
+- Pod status: `CreateContainerConfigError` 
+- Error: `secret "slack-webhook-secret" not found`
+- Slack messages not received
+
 **Check**:
 ```bash
+# Verify webhook secret exists
+oc get secret slack-webhook-secret -n sre-agent
+
+# If missing, create it
+oc create secret generic slack-webhook-secret -n sre-agent \
+  --from-literal=SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+
 # Verify webhook URL is set
 oc get secret slack-webhook-secret -n sre-agent -o jsonpath='{.data.SLACK_WEBHOOK_URL}' | base64 -d
 
 # Test webhook manually
-oc exec -n sre-agent deployment/sre-agent -c agent -- \
-  curl -X POST -H 'Content-Type: application/json' \
-  -d '{"text":"Test message"}' \
-  $(oc get secret slack-webhook-secret -n sre-agent -o jsonpath='{.data.SLACK_WEBHOOK_URL}' | base64 -d)
+WEBHOOK_URL=$(oc get secret slack-webhook-secret -n sre-agent -o jsonpath='{.data.SLACK_WEBHOOK_URL}' | base64 -d)
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"✅ SRE Agent Test Message"}' \
+  "$WEBHOOK_URL"
+```
+
+**Check route URL (for approval links):**
+```bash
+# Verify route exists and is accessible
+oc get route sre-agent -n sre-agent -o jsonpath='{.spec.host}'
+
+# Check if route URL is auto-detected
+oc logs -n sre-agent deployment/sre-agent -c agent | grep "Auto-detected route URL"
+
+# Test route accessibility
+ROUTE_URL=https://$(oc get route sre-agent -n sre-agent -o jsonpath='{.spec.host}')
+curl -k $ROUTE_URL/health
 ```
 
 ### RAG Not Working
@@ -1020,13 +1177,19 @@ oc exec -n sre-agent deployment/sre-agent -c agent -- \
 ```
 
 **Common Issues**:
-1. **RBAC denial**: Agent lacks permissions
+1. **RBAC denial**: Agent lacks permissions in target namespace
    ```bash
+   # Check permissions
    oc auth can-i patch deployment -n <namespace> --as=system:serviceaccount:sre-agent:sre-agent
+   
+   # Grant edit permissions (see Installation step 5)
+   oc adm policy add-role-to-user edit system:serviceaccount:sre-agent:sre-agent -n <namespace>
    ```
+   **Note**: The agent requires `edit` role in each namespace where it should auto-remediate.
 
 2. **Cooldown active**: Too many recent attempts
    - Wait 30 minutes (default cooldown)
+   - Check audit logs for recent remediation attempts
 
 3. **GitOps resource**: Tier 2 requires Git token
    ```bash

@@ -662,25 +662,49 @@ class WorkflowEngine:
                     text=True,
                     timeout=5
                 )
-                if result.returncode == 0 and result.stdout:
+                if result.returncode == 0 and result.stdout.strip():
                     route_url = f"https://{result.stdout.strip()}"
-            except:
-                route_url = "http://sre-agent.sre-agent.svc:8000"  # Fallback to internal
+                else:
+                    logger.error(
+                        "Failed to detect route URL - oc command failed",
+                        returncode=result.returncode,
+                        stderr=result.stderr if result.stderr else "No error output"
+                    )
+            except Exception as e:
+                logger.error(f"Could not auto-detect route URL: {e}")
 
-        api_url = route_url or "http://sre-agent.sre-agent.svc:8000"
+        # Use detected route URL or show configuration error
+        if not route_url:
+            logger.warning(
+                "No external route URL configured - curl commands will not work outside cluster. "
+                "Set SRE_AGENT_ROUTE_URL environment variable or ensure route is created."
+            )
+            api_url = "<ROUTE_URL_NOT_CONFIGURED>"
+        else:
+            api_url = route_url
+
+        # Generate stable fingerprint (works across agent restarts)
+        fingerprint = self.deduplicator._generate_fingerprint(diagnosis)
 
         # Build approval request message
         message = f"🤖 SRE Agent Remediation Request\n\n"
         message += f"Category: {diagnosis.category.value}\n"
         message += f"Reason: {reason}\n\n"
         message += f"Root Cause: {diagnosis.root_cause}\n\n"
-        message += f"To approve remediation:\n"
+
+        if not route_url:
+            message += f"⚠️ WARNING: External route URL not configured!\n"
+            message += f"Set SRE_AGENT_ROUTE_URL environment variable or ensure OpenShift route exists.\n\n"
+
+        message += f"To approve remediation (use stable Issue ID):\n"
         message += f"curl -X POST {api_url}/approve-remediation \\\n"
         message += f"  -H 'Content-Type: application/json' \\\n"
         message += f"  -d '{{\n"
-        message += f"    \"diagnosis_id\": \"{diagnosis.id}\",\n"
+        message += f"    \"diagnosis_id\": \"{fingerprint}\",\n"
         message += f"    \"approved\": true\n"
-        message += f"  }}'\n"
+        message += f"  }}'\n\n"
+        message += f"Issue ID: {fingerprint} (stable across restarts)\n"
+        message += f"Diagnosis ID: {diagnosis.id} (ephemeral)\n"
 
         await event_creator.create_remediation_event(
             namespace=namespace,
