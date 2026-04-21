@@ -42,6 +42,7 @@ class RBACChecker:
         resource: str,
         namespace: Optional[str] = None,
         resource_name: Optional[str] = None,
+        group: Optional[str] = None,
         use_cache: bool = True
     ) -> bool:
         """
@@ -52,19 +53,20 @@ class RBACChecker:
             resource: Resource type (pod, deployment, configmap, etc.)
             namespace: Namespace (None for cluster-scoped)
             resource_name: Specific resource name (optional)
+            group: API group (e.g., "apps" for deployments, "" for core resources)
             use_cache: Whether to use cached results
 
         Returns:
             True if allowed, False if denied
 
         Example:
-            >>> await checker.can_i("delete", "pod", namespace="default")
+            >>> await checker.can_i("delete", "pods", namespace="default")
             True
-            >>> await checker.can_i("delete", "clusterrole")
-            False
+            >>> await checker.can_i("patch", "deployments", namespace="default", group="apps")
+            True
         """
         # Build cache key
-        cache_key = self._build_cache_key(verb, resource, namespace, resource_name)
+        cache_key = self._build_cache_key(verb, resource, namespace, resource_name, group)
 
         # Check cache
         if use_cache and cache_key in self._cache:
@@ -76,21 +78,23 @@ class RBACChecker:
                     verb=verb,
                     resource=resource,
                     namespace=namespace,
+                    group=group,
                     cached=True
                 )
                 return result
 
-        # Execute oc auth can-i
+        # Execute RBAC check
         try:
-            result = await self._execute_can_i(verb, resource, namespace, resource_name)
+            result = await self._execute_can_i(verb, resource, namespace, resource_name, group)
 
             # Cache result
             self._cache[cache_key] = (result, datetime.utcnow())
 
             logger.info(
-                f"RBAC check: {verb} {resource} = {result}",
+                f"RBAC check: {verb} {resource} (group={group or ''}) = {result}",
                 verb=verb,
                 resource=resource,
+                group=group or "",
                 namespace=namespace,
                 resource_name=resource_name,
                 allowed=result,
@@ -115,7 +119,8 @@ class RBACChecker:
         verb: str,
         resource: str,
         namespace: Optional[str],
-        resource_name: Optional[str]
+        resource_name: Optional[str],
+        group: Optional[str] = None
     ) -> bool:
         """
         Execute RBAC check using Kubernetes SelfSubjectAccessReview API.
@@ -125,6 +130,7 @@ class RBACChecker:
             resource: Resource type
             namespace: Namespace (optional)
             resource_name: Resource name (optional)
+            group: API group (e.g., "apps" for deployments, "" for core resources)
 
         Returns:
             True if allowed, False if denied
@@ -145,7 +151,9 @@ class RBACChecker:
         auth_api = client.AuthorizationV1Api()
 
         # Build ResourceAttributes
+        # Note: group="" for core resources (pods, services), "apps" for deployments, etc.
         resource_attributes = client.V1ResourceAttributes(
+            group=group if group is not None else "",
             verb=verb,
             resource=resource,
             namespace=namespace,
@@ -172,9 +180,10 @@ class RBACChecker:
             allowed = response.status.allowed
 
             logger.debug(
-                f"SelfSubjectAccessReview: {verb} {resource} = {allowed}",
+                f"SelfSubjectAccessReview: {verb} {resource} (group={group or ''}) = {allowed}",
                 verb=verb,
                 resource=resource,
+                group=group or "",
                 namespace=namespace,
                 name=resource_name,
                 allowed=allowed,
@@ -199,7 +208,8 @@ class RBACChecker:
         verb: str,
         resource: str,
         namespace: Optional[str],
-        resource_name: Optional[str]
+        resource_name: Optional[str],
+        group: Optional[str] = None
     ) -> str:
         """
         Build cache key for permission check.
@@ -209,11 +219,14 @@ class RBACChecker:
             resource: Resource type
             namespace: Namespace
             resource_name: Resource name
+            group: API group
 
         Returns:
             Cache key string
         """
         parts = [verb, resource]
+        if group:
+            parts.append(f"group:{group}")
         if namespace:
             parts.append(f"ns:{namespace}")
         if resource_name:

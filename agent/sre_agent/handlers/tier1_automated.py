@@ -292,7 +292,8 @@ class Tier1AutomatedHandler(BaseHandler):
         self,
         verb: str,
         resource: str,
-        namespace: str = None
+        namespace: str = None,
+        group: str = None
     ) -> bool:
         """
         Verify RBAC permission before action.
@@ -301,6 +302,7 @@ class Tier1AutomatedHandler(BaseHandler):
             verb: Action verb (get, create, patch, delete)
             resource: Resource type
             namespace: Namespace (optional)
+            group: API group (e.g., "apps" for deployments, "" for core resources)
 
         Returns:
             True if allowed, False if denied
@@ -309,13 +311,14 @@ class Tier1AutomatedHandler(BaseHandler):
             logger.debug("RBAC checks disabled, allowing action")
             return True
 
-        allowed = await self.rbac_checker.can_i(verb, resource, namespace)
+        allowed = await self.rbac_checker.can_i(verb, resource, namespace, group=group)
 
         if not allowed:
             logger.warning(
-                f"RBAC denied: {verb} {resource} in {namespace or 'cluster'}",
+                f"RBAC denied: {verb} {resource} (group={group or ''}) in {namespace or 'cluster'}",
                 verb=verb,
                 resource=resource,
+                group=group or "",
                 namespace=namespace
             )
 
@@ -417,7 +420,9 @@ class Tier1AutomatedHandler(BaseHandler):
 
             # Check RBAC permission
             resource = owner_kind.lower() + "s"  # deployment -> deployments
-            if not await self._verify_rbac("patch", resource, namespace):
+            # Determine API group: apps for Deployment/StatefulSet/DaemonSet, core for others
+            group = "apps" if owner_kind in ["Deployment", "StatefulSet", "DaemonSet"] else ""
+            if not await self._verify_rbac("patch", resource, namespace, group=group):
                 result.status = RemediationStatus.FAILED
                 result.message = f"RBAC denied: cannot patch {resource} in {namespace}"
 

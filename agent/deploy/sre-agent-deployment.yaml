@@ -332,9 +332,9 @@ spec:
       containers:
       - name: agent
         # ============================================
-        # Image: Version 3.1.8 with RBAC Fix (Kubernetes SelfSubjectAccessReview API)
+        # Image: Version 3.1.9 with RBAC Fix (API group support for apps resources)
         # ============================================
-        image: quay.io/sureshgaikwad/ocp-sre-agent:3.1.8-amd64
+        image: quay.io/sureshgaikwad/ocp-sre-agent:3.1.9-amd64
         # For internal OpenShift registry:
         # image: image-registry.openshift-image-registry.svc:5000/sre-agent/ocp-sre-agent:2.0.2
         # For Docker Hub:
