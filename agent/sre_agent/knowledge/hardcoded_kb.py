@@ -195,6 +195,106 @@ HARDCODED_KB_LINKS: Dict[str, List[Dict[str, str]]] = {
             "url": "https://docs.openshift.com/container-platform/latest/cicd/builds/understanding-image-builds.html",
             "description": "Understanding OpenShift builds"
         }
+    ],
+
+    "hpa_unable_to_get_metrics": [
+        {
+            "title": "HPA unable to get metrics troubleshooting",
+            "url": "https://access.redhat.com/solutions/5908131",
+            "description": "Troubleshooting HPA unable to get metrics from metrics-server"
+        },
+        {
+            "title": "HPA troubleshooting guide",
+            "url": "https://access.redhat.com/solutions/5478661",
+            "description": "Comprehensive HPA troubleshooting guide"
+        },
+        {
+            "title": "Horizontal Pod Autoscaler configuration",
+            "url": "https://docs.openshift.com/container-platform/latest/nodes/pods/nodes-pods-autoscaling.html",
+            "description": "Configuring and using HPA in OpenShift"
+        },
+        {
+            "title": "Metrics server troubleshooting",
+            "url": "https://access.redhat.com/solutions/4631291",
+            "description": "Troubleshooting metrics-server in OpenShift"
+        }
+    ],
+
+    "hpa_missing_scaleref": [
+        {
+            "title": "HPA scaleTargetRef not found",
+            "url": "https://access.redhat.com/solutions/5908131",
+            "description": "Resolving HPA scale target reference issues"
+        },
+        {
+            "title": "HPA configuration guide",
+            "url": "https://docs.openshift.com/container-platform/latest/nodes/pods/nodes-pods-autoscaling.html",
+            "description": "Properly configuring HPA scaleTargetRef"
+        },
+        {
+            "title": "Kubernetes HPA walkthrough",
+            "url": "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/",
+            "description": "Understanding HPA configuration and targets"
+        }
+    ],
+
+    "resource_quota_exceeded": [
+        {
+            "title": "HPA at max replicas troubleshooting",
+            "url": "https://access.redhat.com/solutions/5478661",
+            "description": "Troubleshooting HPA reaching maxReplicas limit"
+        },
+        {
+            "title": "HPA not scaling up troubleshooting",
+            "url": "https://access.redhat.com/solutions/5908131",
+            "description": "Diagnosing why HPA cannot scale beyond current replicas"
+        },
+        {
+            "title": "Horizontal Pod Autoscaler best practices",
+            "url": "https://docs.openshift.com/container-platform/latest/nodes/pods/nodes-pods-autoscaling.html",
+            "description": "Best practices for HPA configuration and scaling"
+        },
+        {
+            "title": "Resource limits and quotas",
+            "url": "https://docs.openshift.com/container-platform/latest/nodes/clusters/nodes-cluster-limit-ranges.html",
+            "description": "Understanding resource limits and quotas in OpenShift"
+        }
+    ],
+
+    "cluster_autoscaler_failed": [
+        {
+            "title": "ClusterAutoscaler troubleshooting",
+            "url": "https://access.redhat.com/solutions/4631411",
+            "description": "Troubleshooting OpenShift ClusterAutoscaler issues"
+        },
+        {
+            "title": "Cluster autoscaling configuration",
+            "url": "https://docs.openshift.com/container-platform/latest/machine_management/applying-autoscaling.html",
+            "description": "Configuring cluster autoscaling in OpenShift"
+        },
+        {
+            "title": "MachineAutoscaler configuration",
+            "url": "https://docs.openshift.com/container-platform/latest/machine_management/creating-machineset.html",
+            "description": "Understanding MachineSet and MachineAutoscaler"
+        }
+    ],
+
+    "node_scale_insufficient_resources": [
+        {
+            "title": "Node provisioning failures",
+            "url": "https://access.redhat.com/solutions/4631411",
+            "description": "Troubleshooting node provisioning and scaling issues"
+        },
+        {
+            "title": "Cloud provider quota limits",
+            "url": "https://docs.openshift.com/container-platform/latest/installing/installing-troubleshooting.html",
+            "description": "Understanding cloud provider resource quotas and limits"
+        },
+        {
+            "title": "ClusterAutoscaler capacity planning",
+            "url": "https://docs.openshift.com/container-platform/latest/machine_management/applying-autoscaling.html",
+            "description": "Planning cluster capacity and autoscaling"
+        }
     ]
 }
 

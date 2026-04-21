@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
     from sre_agent.analyzers.autoscaling_analyzer import AutoscalingAnalyzer
     from sre_agent.analyzers.proactive_analyzer import ProactiveAnalyzer
     from sre_agent.analyzers.llm_analyzer import LLMAnalyzer
+    from sre_agent.analyzers.unknown_issue_handler import UnknownIssueHandler
     # Phase 3: Handlers
     from sre_agent.handlers.tier1_automated import Tier1AutomatedHandler
     from sre_agent.handlers.tier2_gitops import Tier2GitOpsHandler
@@ -117,8 +118,10 @@ async def lifespan(app: FastAPI):
         workflow_engine.register_analyzer(NetworkingAnalyzer(mcp_registry))
         workflow_engine.register_analyzer(AutoscalingAnalyzer(mcp_registry))
         workflow_engine.register_analyzer(ProactiveAnalyzer(mcp_registry))
-        # LLM analyzer is fallback - register LAST
+        # LLM analyzer is fallback for known patterns
         workflow_engine.register_analyzer(LLMAnalyzer(mcp_registry))
+        # Unknown handler is ULTIMATE fallback - catches ALL undiagnosed issues
+        workflow_engine.register_analyzer(UnknownIssueHandler(mcp_registry))
         print(f"   ✅ Registered {len(workflow_engine.analyzers)} analyzers")
     except Exception as e:
         print(f"   ⚠️  Analyzer registration: {e}")
@@ -631,6 +634,221 @@ async def index_internal_docs():
         raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
 
 
+class ResolutionSubmission(BaseModel):
+    """Request model for submitting unknown issue resolution."""
+    root_cause: str
+    fix_applied: str
+    fix_commands: Optional[list[str]] = None
+    works_for_similar: bool = True
+    notes: Optional[str] = None
+    sre_name: Optional[str] = None
+
+
+@app.get("/unknown-issues")
+async def list_unknown_issues(
+    min_occurrences: int = 1,
+    limit: int = 50
+):
+    """
+    List unresolved unknown issues for SRE investigation.
+
+    Query Parameters:
+        min_occurrences: Minimum occurrence count (default: 1)
+        limit: Maximum number to return (default: 50)
+
+    Returns list of unknown issues sorted by severity and occurrence.
+    """
+    try:
+        from sre_agent.stores.unknown_issue_store import get_unknown_store
+
+        unknown_store = get_unknown_store()
+        issues = await unknown_store.get_unresolved_issues(
+            min_occurrences=min_occurrences,
+            limit=limit
+        )
+
+        # Convert to JSON-serializable format
+        issues_data = []
+        for issue in issues:
+            issues_data.append({
+                "fingerprint": issue.fingerprint,
+                "first_seen": issue.first_seen.isoformat(),
+                "last_seen": issue.last_seen.isoformat(),
+                "occurrence_count": issue.occurrence_count,
+                "category": issue.category,
+                "severity_score": issue.severity_score,
+                "namespace": issue.observation_data.get("namespace"),
+                "resource_name": issue.observation_data.get("resource_name"),
+                "resource_kind": issue.observation_data.get("resource_kind"),
+                "error_patterns": issue.error_patterns[:3],  # First 3 patterns
+                "investigation_url": f"/unknown-issues/{issue.fingerprint}"
+            })
+
+        return {
+            "status": "success",
+            "total": len(issues_data),
+            "issues": issues_data
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list unknown issues: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/unknown-issues/{fingerprint}")
+async def get_unknown_issue(fingerprint: str):
+    """
+    Get detailed information about a specific unknown issue.
+
+    Returns full investigation notes, evidence, and resolution form.
+    """
+    try:
+        from sre_agent.stores.unknown_issue_store import get_unknown_store
+
+        unknown_store = get_unknown_store()
+        issue = await unknown_store.get_issue_by_fingerprint(fingerprint)
+
+        if not issue:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown issue with fingerprint {fingerprint} not found"
+            )
+
+        return {
+            "status": "success",
+            "issue": {
+                "fingerprint": issue.fingerprint,
+                "first_seen": issue.first_seen.isoformat(),
+                "last_seen": issue.last_seen.isoformat(),
+                "occurrence_count": issue.occurrence_count,
+                "category": issue.category,
+                "severity_score": issue.severity_score,
+                "resolved": issue.resolved,
+                "resolution_data": issue.resolution_data,
+                "observation": issue.observation_data,
+                "error_patterns": issue.error_patterns,
+                "investigation_notes": issue.investigation_notes,
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get unknown issue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/unknown-issues/{fingerprint}/resolve")
+async def resolve_unknown_issue(
+    fingerprint: str,
+    resolution: ResolutionSubmission
+):
+    """
+    Submit resolution for an unknown issue.
+
+    SREs use this endpoint to teach the agent how they fixed unknown issues.
+    The agent will learn from this and potentially auto-fix similar issues.
+
+    Args:
+        fingerprint: Issue fingerprint
+        resolution: Resolution details (root cause, fix, commands)
+
+    Returns confirmation and next steps (pattern discovery, etc.)
+    """
+    try:
+        from sre_agent.stores.unknown_issue_store import get_unknown_store
+
+        unknown_store = get_unknown_store()
+
+        # Verify issue exists
+        issue = await unknown_store.get_issue_by_fingerprint(fingerprint)
+        if not issue:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown issue with fingerprint {fingerprint} not found"
+            )
+
+        if issue.resolved:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Issue {fingerprint} is already marked as resolved"
+            )
+
+        # Build resolution data
+        resolution_data = {
+            "root_cause": resolution.root_cause,
+            "fix_applied": resolution.fix_applied,
+            "fix_commands": resolution.fix_commands or [],
+            "works_for_similar": resolution.works_for_similar,
+            "notes": resolution.notes or "",
+            "sre_name": resolution.sre_name or "anonymous",
+            "submitted_at": datetime.utcnow().isoformat(),
+            "fingerprint": fingerprint
+        }
+
+        # Mark as resolved
+        success = await unknown_store.mark_resolved(fingerprint, resolution_data)
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to mark issue as resolved"
+            )
+
+        logger.info(
+            "Unknown issue resolved by SRE",
+            fingerprint=fingerprint,
+            sre_name=resolution.sre_name,
+            root_cause=resolution.root_cause[:100]
+        )
+
+        return {
+            "status": "success",
+            "message": f"✅ Resolution recorded for unknown issue {fingerprint}",
+            "fingerprint": fingerprint,
+            "next_steps": [
+                "Resolution stored in knowledge base",
+                "Similar issues will reference this solution",
+                "Pattern discovery engine will analyze for auto-fix potential",
+                f"If {issue.occurrence_count} similar issues occur, pattern may be promoted to analyzer"
+            ],
+            "impact": {
+                "similar_issues_helped": f"Future occurrences of this pattern",
+                "learning_enabled": True,
+                "auto_fix_potential": resolution.works_for_similar
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resolve unknown issue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/unknown-issues/stats/summary")
+async def get_unknown_stats():
+    """
+    Get statistics about unknown issues.
+
+    Returns counts, resolution rates, trends, etc.
+    """
+    try:
+        from sre_agent.stores.unknown_issue_store import get_unknown_store
+
+        unknown_store = get_unknown_store()
+        stats = await unknown_store.get_stats()
+
+        return {
+            "status": "success",
+            "unknown_issues": stats
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get unknown stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/stats")
 async def get_stats():
     """
@@ -670,6 +888,15 @@ async def get_stats():
         stats["kb_retriever"] = kb_retriever.get_stats()
     except Exception as e:
         stats["kb_retriever"] = {"error": str(e)}
+
+    # Add unknown issue stats
+    try:
+        from sre_agent.stores.unknown_issue_store import get_unknown_store
+        unknown_store = get_unknown_store()
+        unknown_stats = await unknown_store.get_stats()
+        stats["unknown_issues"] = unknown_stats
+    except Exception as e:
+        stats["unknown_issues"] = {"error": str(e)}
 
     return stats
 

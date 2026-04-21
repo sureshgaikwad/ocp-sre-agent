@@ -160,23 +160,44 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                     pattern=pattern
                 )
 
+                # Extract more details for better diagnosis
+                scale_target_ref = spec.get("scaleTargetRef", {})
+                target_kind = scale_target_ref.get("kind", "unknown")
+                target_name = scale_target_ref.get("name", "unknown")
+
                 return self._create_diagnosis(
                     observation=observation,
                     category=DiagnosisCategory.HPA_UNABLE_TO_GET_METRICS,
-                    root_cause=f"HPA unable to fetch metrics: {observation.message}",
+                    root_cause=f"HPA unable to fetch metrics from metrics-server. Common causes: 1) metrics-server not deployed/unhealthy, 2) pod missing resource requests (CPU/memory), 3) metrics API unavailable. Target deployment: {target_kind}/{target_name}. Error: {observation.message}",
                     confidence=Confidence.HIGH,
                     tier=3,
                     recommended_actions=[
-                        "Check metrics-server deployment: oc get deployment metrics-server -n kube-system",
-                        "Verify metrics-server is running: oc get pods -n kube-system -l k8s-app=metrics-server",
-                        "Check HPA metrics configuration in spec.metrics",
-                        "Verify pod has resource requests defined (required for CPU/memory metrics)",
-                        "Test metrics API: kubectl top pods -n " + observation.namespace
+                        "STEP 1: Check if metrics-server is deployed and healthy",
+                        "oc get deployment metrics-server -n openshift-monitoring",
+                        "oc get pods -n openshift-monitoring -l app=metrics-server",
+                        "",
+                        "STEP 2: Verify pod has resource requests defined (REQUIRED for HPA)",
+                        f"oc get deployment {target_name} -n {observation.namespace} -o jsonpath='{{.spec.template.spec.containers[*].resources}}'",
+                        "If empty, add resource requests: spec.containers[].resources.requests.cpu/memory",
+                        "",
+                        "STEP 3: Test metrics API manually",
+                        f"oc adm top pods -n {observation.namespace}",
+                        "If this fails, metrics-server is not working",
+                        "",
+                        "STEP 4: Check HPA metrics configuration",
+                        f"oc get hpa {observation.resource_name} -n {observation.namespace} -o yaml",
+                        "",
+                        "STEP 5: Review metrics-server logs for errors",
+                        "oc logs -n openshift-monitoring -l app=metrics-server --tail=50"
                     ],
                     evidence={
+                        "hpa_name": observation.resource_name,
                         "hpa_status": status,
                         "hpa_spec": spec,
-                        "message": observation.message
+                        "message": observation.message,
+                        "target_kind": target_kind,
+                        "target_name": target_name,
+                        "scale_target_ref": scale_target_ref
                     }
                 )
 
@@ -196,15 +217,26 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                 return self._create_diagnosis(
                     observation=observation,
                     category=DiagnosisCategory.HPA_MISSING_SCALEREF,
-                    root_cause=f"HPA scale target not found: {target_kind}/{target_name}",
+                    root_cause=f"HPA references a scale target that does not exist: {target_kind}/{target_name} in namespace {observation.namespace}. This typically happens when: 1) the target deployment/statefulset was deleted, 2) the target was renamed, or 3) HPA was created with wrong target reference.",
                     confidence=Confidence.HIGH,
                     tier=3,
                     recommended_actions=[
-                        f"Verify {target_kind} '{target_name}' exists: oc get {target_kind} {target_name} -n {observation.namespace}",
-                        "Check if deployment/statefulset was deleted",
-                        "Update HPA scaleTargetRef or delete HPA if no longer needed"
+                        "STEP 1: Verify if target resource exists",
+                        f"oc get {target_kind.lower()} -n {observation.namespace}",
+                        f"oc get {target_kind.lower()} {target_name} -n {observation.namespace}",
+                        "",
+                        "STEP 2: If target was renamed, update HPA:",
+                        f"oc patch hpa {observation.resource_name} -n {observation.namespace} --type=json -p='[{{\"op\":\"replace\",\"path\":\"/spec/scaleTargetRef/name\",\"value\":\"<new-name>\"}}]'",
+                        "",
+                        "STEP 3: If target was deleted, either:",
+                        "Option A: Recreate the target deployment/statefulset",
+                        f"Option B: Delete the orphaned HPA: oc delete hpa {observation.resource_name} -n {observation.namespace}",
+                        "",
+                        "STEP 4: Check for recent changes in namespace",
+                        f"oc get events -n {observation.namespace} --sort-by='.lastTimestamp' | grep {target_name}"
                     ],
                     evidence={
+                        "hpa_name": observation.resource_name,
                         "scale_target_ref": scale_target_ref,
                         "target_kind": target_kind,
                         "target_name": target_name
@@ -214,6 +246,7 @@ class AutoscalingAnalyzer(BaseAnalyzer):
         # Check if HPA is at max replicas
         current_replicas = status.get("currentReplicas", 0)
         max_replicas = spec.get("maxReplicas", 0)
+        min_replicas = spec.get("minReplicas", 1)
 
         if current_replicas >= max_replicas:
             logger.info(
@@ -223,22 +256,48 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                 max=max_replicas
             )
 
+            # Extract metric information for detailed diagnosis
+            current_metrics = status.get("currentMetrics", [])
+            target_cpu = "unknown"
+            cpu_utilization = "unknown"
+
+            # Try to extract CPU metrics
+            for metric in current_metrics:
+                if metric.get("type") == "Resource" and metric.get("resource", {}).get("name") == "cpu":
+                    cpu_current = metric.get("resource", {}).get("current", {})
+                    cpu_utilization = cpu_current.get("averageUtilization", "unknown")
+
+            # Check spec for target
+            metrics_spec = spec.get("metrics", [])
+            for metric_spec in metrics_spec:
+                if metric_spec.get("type") == "Resource" and metric_spec.get("resource", {}).get("name") == "cpu":
+                    target_cpu = metric_spec.get("resource", {}).get("target", {}).get("averageUtilization", "unknown")
+
             # This is Tier 2 - we can propose config change
             return self._create_diagnosis(
                 observation=observation,
                 category=DiagnosisCategory.RESOURCE_QUOTA_EXCEEDED,  # Reusing existing category
-                root_cause=f"HPA reached maximum replicas ({max_replicas}), consider increasing maxReplicas",
+                root_cause=f"HPA reached maximum replicas ({max_replicas}). Current CPU utilization: {cpu_utilization}%, Target: {target_cpu}%. Consider: 1) Horizontal scaling (increase maxReplicas), 2) Vertical scaling (increase pod resources), or 3) Application optimization.",
                 confidence=Confidence.HIGH,
                 tier=2,
                 recommended_actions=[
-                    f"Increase HPA maxReplicas from {max_replicas} to {max_replicas * 2}",
-                    "Verify cluster has capacity for additional pods",
-                    "Consider vertical scaling (increase pod resources) instead"
+                    f"INVESTIGATE FIRST: Check if this is legitimate load increase or inefficient application",
+                    f"Option A: Horizontal scaling - Increase HPA maxReplicas from {max_replicas} to {int(max_replicas * 1.5)}",
+                    f"Option B: Vertical scaling - Increase pod CPU/memory limits",
+                    f"Option C: Optimize application code to reduce resource usage",
+                    f"Option D: Adjust HPA target metric if too aggressive (current target: {target_cpu}%)",
+                    "Verify cluster has capacity for additional pods before scaling",
+                    "Monitor pod CPU throttling to determine if vertical scaling is needed"
                 ],
                 evidence={
+                    "hpa_name": observation.resource_name,  # Add HPA name explicitly
                     "current_replicas": current_replicas,
                     "max_replicas": max_replicas,
-                    "current_metrics": status.get("currentMetrics", [])
+                    "min_replicas": min_replicas,
+                    "cpu_utilization": cpu_utilization,
+                    "target_cpu": target_cpu,
+                    "current_metrics": current_metrics,
+                    "desired_replicas": status.get("desiredReplicas", current_replicas)
                 }
             )
 

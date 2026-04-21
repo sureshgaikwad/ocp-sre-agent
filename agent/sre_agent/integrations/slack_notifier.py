@@ -174,7 +174,16 @@ class SlackNotifier:
         evidence = diagnosis.evidence
         namespace = evidence.get("namespace", "cluster-wide")
         resource_kind = evidence.get("resource_kind", "unknown")
-        resource_name = evidence.get("resource_name", "unknown")
+
+        # Extract resource name with better fallbacks
+        resource_name = (
+            evidence.get("resource_name") or
+            evidence.get("pod_name") or
+            evidence.get("deployment_name") or
+            evidence.get("hpa_name") or
+            evidence.get("operator_name") or
+            "unknown"
+        )
 
         # Determine severity emoji
         severity_emoji = self._get_severity_emoji(diagnosis.category.value)
@@ -426,10 +435,17 @@ class SlackNotifier:
         evidence = diagnosis.evidence
         steps = []
 
-        # Show what was observed
+        # Show what was observed - extract resource name with fallbacks
         resource_kind = evidence.get("resource_kind", "unknown")
         namespace = evidence.get("namespace", "unknown")
-        resource_name = evidence.get("resource_name", "unknown")
+        resource_name = (
+            evidence.get("resource_name") or
+            evidence.get("pod_name") or
+            evidence.get("deployment_name") or
+            evidence.get("hpa_name") or
+            evidence.get("operator_name") or
+            "unknown"
+        )
 
         steps.append(f"1️⃣ **Observed**: `{resource_kind}` resource `{namespace}/{resource_name}`")
 
@@ -454,16 +470,46 @@ class SlackNotifier:
                 steps.append(f"4️⃣ **Registry Response**: HTTP `{evidence.get('http_status')}`")
 
         elif diagnosis.category.value == "hpa_max_replicas":
-            steps.append(f"2️⃣ **Checked HPA Status**: Current replicas `{evidence.get('current_replicas', '?')}`")
-            steps.append(f"3️⃣ **Max Replicas**: Configured max `{evidence.get('max_replicas', '?')}`")
-            steps.append(f"4️⃣ **Metrics**: CPU `{evidence.get('cpu_utilization', 'unknown')}`")
+            hpa_name = evidence.get("hpa_name", resource_name)
+            steps.append(f"2️⃣ **Ran Command**: `oc get hpa/{hpa_name} -n {namespace} -o json`")
+            steps.append(f"3️⃣ **Checked HPA Status**: Current replicas `{evidence.get('current_replicas', '?')}`")
+            steps.append(f"4️⃣ **Max Replicas**: Configured max `{evidence.get('max_replicas', '?')}`")
+            steps.append(f"5️⃣ **Metrics**: CPU `{evidence.get('cpu_utilization', 'unknown')}`")
+
+        elif diagnosis.category.value == "hpa_unable_to_get_metrics":
+            hpa_name = evidence.get("hpa_name", resource_name)
+            target_kind = evidence.get("target_kind", "Deployment")
+            target_name = evidence.get("target_name", "unknown")
+
+            steps.append(f"2️⃣ **Ran Command**: `oc get hpa/{hpa_name} -n {namespace} -o yaml`")
+            steps.append(f"3️⃣ **Checked HPA Conditions**: Found metrics unavailable error")
+            steps.append(f"4️⃣ **Target Resource**: {target_kind}/{target_name}")
+            steps.append(f"5️⃣ **Ran Command**: `oc get deployment metrics-server -n openshift-monitoring`")
+            steps.append(f"6️⃣ **Checked Metrics Server**: Verified if metrics-server is running")
+            steps.append(f"7️⃣ **Checked Pod Resources**: `oc get {target_kind.lower()} {target_name} -n {namespace} -o jsonpath='{{.spec.template.spec.containers[*].resources}}'`")
+            steps.append(f"8️⃣ **Diagnosis**: HPA cannot fetch metrics - either metrics-server issue or pod missing resource requests")
+
+        elif diagnosis.category.value == "hpa_missing_scaleref":
+            hpa_name = evidence.get("hpa_name", resource_name)
+            target_kind = evidence.get("target_kind", "Deployment")
+            target_name = evidence.get("target_name", "unknown")
+
+            steps.append(f"2️⃣ **Ran Command**: `oc get hpa/{hpa_name} -n {namespace} -o yaml`")
+            steps.append(f"3️⃣ **Checked scaleTargetRef**: {target_kind}/{target_name}")
+            steps.append(f"4️⃣ **Ran Command**: `oc get {target_kind.lower()} {target_name} -n {namespace}`")
+            steps.append(f"5️⃣ **Result**: Target resource NOT FOUND")
+            steps.append(f"6️⃣ **Checked Events**: `oc get events -n {namespace} --sort-by='.lastTimestamp' | grep {target_name}`")
+            steps.append(f"7️⃣ **Diagnosis**: HPA references a deleted/renamed resource")
 
         elif diagnosis.category.value == "resource_quota_exceeded":
-            cmd = f"oc get hpa/{resource_name} -n {namespace} -o json"
+            # Get HPA name from evidence
+            hpa_name = evidence.get("hpa_name", resource_name)
+            cmd = f"oc get hpa/{hpa_name} -n {namespace} -o json"
             steps.append(f"2️⃣ **Ran Command**: `{cmd}`")
-            steps.append(f"3️⃣ **Checked Replicas**: Current `{evidence.get('current_replicas', '?')}` / Max `{evidence.get('max_replicas', '?')}`")
-            steps.append(f"4️⃣ **Metrics Analysis**: Target CPU `{evidence.get('target_cpu', 'unknown')}`, Current CPU `{evidence.get('cpu_utilization', 'unknown')}`")
-            steps.append(f"5️⃣ **Verified**: HPA cannot scale beyond maxReplicas limit")
+            steps.append(f"3️⃣ **Checked Replicas**: Current `{evidence.get('current_replicas', '?')}/{evidence.get('max_replicas', '?')}` (at max limit)")
+            steps.append(f"4️⃣ **Metrics Analysis**: Current CPU `{evidence.get('cpu_utilization', 'unknown')}%`, Target CPU `{evidence.get('target_cpu', 'unknown')}%`")
+            steps.append(f"5️⃣ **Desired Replicas**: HPA wants `{evidence.get('desired_replicas', '?')}` replicas but maxReplicas is `{evidence.get('max_replicas', '?')}`")
+            steps.append(f"6️⃣ **Verified**: HPA cannot scale beyond maxReplicas limit - needs investigation")
 
         elif diagnosis.category.value == "cluster_operator_degraded":
             operator_name = evidence.get("operator_name", resource_name)
@@ -589,26 +635,25 @@ class SlackNotifier:
         evidence = diagnosis.evidence
         namespace = evidence.get("namespace", "unknown")
         resource_kind = evidence.get("resource_kind", "unknown")
-        resource_name = evidence.get("resource_name", "unknown")
+
+        # Extract resource name with better fallbacks
+        resource_name = (
+            evidence.get("resource_name") or
+            evidence.get("pod_name") or
+            evidence.get("deployment_name") or
+            evidence.get("hpa_name") or
+            "unknown"
+        )
+
         category = diagnosis.category.value
 
         commands = []
 
         if category == "oom_killed":
-            # OOMKilled - increase memory limit
+            # OOMKilled - COMPREHENSIVE diagnostic approach
             current_memory = evidence.get("memory_limit", "128Mi")
-            # Calculate new memory (double it)
-            try:
-                if current_memory.endswith("Mi"):
-                    current_mb = int(current_memory[:-2])
-                    new_memory = f"{current_mb * 2}Mi"
-                elif current_memory.endswith("Gi"):
-                    current_gb = int(current_memory[:-2])
-                    new_memory = f"{current_gb * 2}Gi"
-                else:
-                    new_memory = "256Mi"
-            except:
-                new_memory = "256Mi"
+            memory_request = evidence.get("memory_request", current_memory)
+            memory_usage = evidence.get("memory_usage", "unknown")
 
             # Get deployment name (remove pod suffix)
             if resource_kind == "Pod" and "-" in resource_name:
@@ -617,22 +662,82 @@ class SlackNotifier:
                 deployment_name = resource_name
 
             commands.append(f"# ========================================")
-            commands.append(f"# WHY: Container exceeded memory limit")
-            commands.append(f"# Container was killed by kernel OOM killer (Out Of Memory)")
-            commands.append(f"# Need to increase memory to prevent future crashes")
+            commands.append(f"# DIAGNOSIS: OOMKilled - Container exceeded memory limit")
+            commands.append(f"# Current limit: {current_memory}")
+            commands.append(f"# Current request: {memory_request}")
+            if memory_usage != "unknown":
+                commands.append(f"# Last usage: {memory_usage}")
             commands.append(f"# ========================================")
             commands.append("")
-            commands.append(f"# Increase memory limit for {namespace}/{deployment_name}")
-            commands.append(f"oc set resources deployment/{deployment_name} -n {namespace} --limits=memory={new_memory} --requests=memory={new_memory}")
+            commands.append("# STEP 1: INVESTIGATE ROOT CAUSE (Don't blindly increase resources!)")
             commands.append("")
-            commands.append("# Or edit directly:")
+            commands.append("# Check if this is a MEMORY LEAK:")
+            commands.append(f"oc logs {resource_name} -n {namespace} --previous | grep -i 'heap\\|memory\\|leak'")
+            commands.append("")
+            commands.append("# Check memory usage over time (if metrics available):")
+            commands.append(f"oc adm top pod {resource_name} -n {namespace}")
+            commands.append("")
+            commands.append("# Review application logs for memory-intensive operations:")
+            commands.append(f"oc logs {resource_name} -n {namespace} --previous --tail=100")
+            commands.append("")
+            commands.append("# STEP 2: IDENTIFY THE ISSUE TYPE:")
+            commands.append("#")
+            commands.append("# Issue Type 1: MEMORY LEAK in application code")
+            commands.append("#   Symptom: Memory usage constantly increases until OOM")
+            commands.append("#   Solution: Fix the memory leak in application code")
+            commands.append("#   Action: DO NOT just increase memory - this delays the problem")
+            commands.append("#")
+            commands.append("# Issue Type 2: LEGITIMATE high memory workload")
+            commands.append("#   Symptom: Stable memory usage, but hits limit during peak load")
+            commands.append("#   Solution: Increase memory limit")
+            commands.append("#   Action: Calculate actual need based on peak usage + 20% buffer")
+            commands.append("#")
+            commands.append("# Issue Type 3: MEMORY SPIKE during startup")
+            commands.append("#   Symptom: OOM only during pod startup/initialization")
+            commands.append("#   Solution: Increase memory OR optimize startup process")
+            commands.append("#   Action: Check startup logs for excessive memory usage")
+            commands.append("#")
+            commands.append("# Issue Type 4: CONFIGURATION ISSUE (e.g., JVM heap too large)")
+            commands.append("#   Symptom: Application configured to use more memory than limit")
+            commands.append("#   Solution: Adjust application memory settings (e.g., -Xmx for Java)")
+            commands.append("#   Action: Review application memory configuration")
+            commands.append("")
+            commands.append("# STEP 3: IF you determined this is a legitimate memory need:")
+            commands.append("")
+
+            # Calculate new memory based on actual usage if available
+            try:
+                if current_memory.endswith("Mi"):
+                    current_mb = int(current_memory[:-2])
+                    # Recommend 50% increase instead of doubling for gradual scaling
+                    new_memory = f"{int(current_mb * 1.5)}Mi"
+                elif current_memory.endswith("Gi"):
+                    current_gb = float(current_memory[:-2])
+                    new_memory = f"{current_gb * 1.5:.1f}Gi"
+                else:
+                    new_memory = "256Mi"
+            except:
+                new_memory = "256Mi"
+
+            commands.append(f"# Increase memory limit (gradual approach - 50% increase):")
+            commands.append(f"oc set resources deployment/{deployment_name} -n {namespace} \\")
+            commands.append(f"  --limits=memory={new_memory} \\")
+            commands.append(f"  --requests=memory={new_memory}")
+            commands.append("")
+            commands.append("# Or edit directly to fine-tune:")
             commands.append(f"oc edit deployment/{deployment_name} -n {namespace}")
             commands.append(f"# Change: resources.limits.memory: {current_memory} → {new_memory}")
             commands.append("")
-            commands.append("# 📚 Red Hat Knowledge Base:")
-            commands.append("# - https://access.redhat.com/solutions/4896471 - Pod OOMKilled troubleshooting")
-            commands.append("# - https://docs.openshift.com/container-platform/latest/nodes/clusters/nodes-cluster-resource-configure.html")
-            commands.append("# - https://access.redhat.com/solutions/3006972 - Understanding OOM killer")
+            commands.append("# STEP 4: MONITOR after change:")
+            commands.append(f"oc get pods -n {namespace} -w")
+            commands.append(f"# Wait for new pod to start, then check memory usage:")
+            commands.append(f"oc adm top pod -n {namespace} -l app={deployment_name}")
+            commands.append("")
+            commands.append("# 📚 OFFICIAL RED HAT DOCUMENTATION:")
+            commands.append("# - https://access.redhat.com/solutions/4896471 - Troubleshooting OOMKilled pods")
+            commands.append("# - https://access.redhat.com/solutions/3006972 - Understanding Linux OOM Killer")
+            commands.append("# - https://docs.openshift.com/container-platform/latest/nodes/clusters/nodes-cluster-resource-configure.html - Resource management")
+            commands.append("# - https://access.redhat.com/articles/6955985 - Pod troubleshooting guide")
 
         elif category == "crash_loop_back_off":
             commands.append(f"# ========================================")
@@ -678,28 +783,100 @@ class SlackNotifier:
             commands.append("# - https://access.redhat.com/solutions/3754131 - Pull secret configuration")
             commands.append("# - https://docs.openshift.com/container-platform/latest/openshift_images/managing_images/using-image-pull-secrets.html")
 
-        elif category == "hpa_max_replicas":
+        elif category == "hpa_max_replicas" or category == "resource_quota_exceeded":
             current_replicas = evidence.get("current_replicas", 1)
             max_replicas = evidence.get("max_replicas", 1)
-            new_max = max_replicas * 2
+            min_replicas = evidence.get("min_replicas", 1)
+            cpu_utilization = evidence.get("cpu_utilization", "unknown")
+            target_cpu = evidence.get("target_cpu", "unknown")
 
             commands.append(f"# ========================================")
-            commands.append(f"# WHY: HPA reached maximum replica limit")
-            commands.append(f"# Application under load but cannot scale further")
-            commands.append(f"# Current: {current_replicas}/{max_replicas} replicas")
+            commands.append(f"# DIAGNOSIS: HPA at maximum replicas")
+            commands.append(f"# Current replicas: {current_replicas}/{max_replicas}")
+            commands.append(f"# Min replicas: {min_replicas}")
+            commands.append(f"# CPU utilization: {cpu_utilization}")
+            commands.append(f"# Target CPU: {target_cpu}")
             commands.append(f"# ========================================")
             commands.append("")
-            commands.append(f"# Increase HPA maxReplicas:")
+            commands.append("# STEP 1: ANALYZE WHY HPA IS SCALING")
+            commands.append("")
+            commands.append("# Check current HPA status and metrics:")
+            commands.append(f"oc describe hpa/{resource_name} -n {namespace}")
+            commands.append("")
+            commands.append("# Check current load on pods:")
+            commands.append(f"oc adm top pods -n {namespace} -l app={resource_name}")
+            commands.append("")
+            commands.append("# Check HPA metrics and conditions:")
+            commands.append(f"oc get hpa/{resource_name} -n {namespace} -o yaml")
+            commands.append("")
+            commands.append("# STEP 2: IDENTIFY THE ROOT CAUSE")
+            commands.append("#")
+            commands.append("# Cause 1: LEGITIMATE INCREASED TRAFFIC/LOAD")
+            commands.append("#   Symptom: High CPU/memory usage across all pods")
+            commands.append("#   Solution: Increase maxReplicas")
+            commands.append("#   Verify: Check application metrics, traffic patterns")
+            commands.append("#")
+            commands.append("# Cause 2: INEFFICIENT APPLICATION CODE")
+            commands.append("#   Symptom: High CPU usage but low actual throughput")
+            commands.append("#   Solution: Optimize application code, NOT increase replicas")
+            commands.append("#   Verify: Profile application, check for inefficient queries/loops")
+            commands.append("#")
+            commands.append("# Cause 3: POD RESOURCE LIMITS TOO LOW")
+            commands.append("#   Symptom: Pods hitting CPU limits, causing throttling")
+            commands.append("#   Solution: VERTICAL scaling (increase pod resources) instead")
+            commands.append("#   Verify: Check if pods are CPU throttled")
+            commands.append("#")
+            commands.append("# Cause 4: HPA TARGET METRIC TOO AGGRESSIVE")
+            commands.append("#   Symptom: HPA scaling at low CPU % (e.g., target=50%)")
+            commands.append("#   Solution: Adjust target CPU percentage higher (e.g., 70-80%)")
+            commands.append("#   Verify: Review if current target is appropriate")
+            commands.append("#")
+            commands.append("# Cause 5: CLUSTER CAPACITY CONSTRAINTS")
+            commands.append("#   Symptom: HPA wants to scale but pods are Pending")
+            commands.append("#   Solution: Add cluster capacity or reduce resource requests")
+            commands.append("#   Verify: Check for pending pods")
+            commands.append("")
+            commands.append("# Check for CPU throttling (suggests vertical scaling needed):")
+            commands.append(f"oc get pods -n {namespace} -l app={resource_name} -o json | \\")
+            commands.append("  jq '.items[] | .metadata.name, .spec.containers[].resources'")
+            commands.append("")
+            commands.append("# Check for pending pods (cluster capacity issue):")
+            commands.append(f"oc get pods -n {namespace} -l app={resource_name} | grep Pending")
+            commands.append("")
+            commands.append("# STEP 3: CHOOSE THE RIGHT SOLUTION")
+            commands.append("")
+            commands.append("# Option A: HORIZONTAL scaling (increase maxReplicas)")
+            commands.append("# Use when: Legitimate increased load, pods are efficient")
+
+            # Calculate new max with better logic
+            new_max = int(max_replicas * 1.5)  # 50% increase instead of doubling
+
             commands.append(f"oc patch hpa/{resource_name} -n {namespace} --type=json -p='[{{\"op\":\"replace\",\"path\":\"/spec/maxReplicas\",\"value\":{new_max}}}]'")
             commands.append("")
-            commands.append("# Or edit directly:")
-            commands.append(f"oc edit hpa/{resource_name} -n {namespace}")
-            commands.append(f"# Change: spec.maxReplicas: {max_replicas} → {new_max}")
+            commands.append("# Option B: VERTICAL scaling (increase pod resources)")
+            commands.append("# Use when: Pods are CPU throttled or memory constrained")
+            commands.append(f"# Get current deployment to check resources:")
+            commands.append(f"oc get deployment -n {namespace} -l app={resource_name}")
+            commands.append("# Then increase CPU/memory limits")
             commands.append("")
-            commands.append("# 📚 Red Hat Knowledge Base:")
-            commands.append("# - https://docs.openshift.com/container-platform/latest/nodes/pods/nodes-pods-autoscaling.html")
-            commands.append("# - https://access.redhat.com/solutions/5478661 - HPA troubleshooting")
-            commands.append("# - https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/")
+            commands.append("# Option C: ADJUST HPA target metric")
+            commands.append("# Use when: Target is too aggressive (e.g., 50%)")
+            commands.append(f"oc patch hpa/{resource_name} -n {namespace} --type=json -p='[{{\"op\":\"replace\",\"path\":\"/spec/metrics/0/resource/target/averageUtilization\",\"value\":75}}]'")
+            commands.append("")
+            commands.append("# Option D: OPTIMIZE application code")
+            commands.append("# Use when: Application is inefficient")
+            commands.append("# Review application logs and profiling data")
+            commands.append("")
+            commands.append("# STEP 4: VERIFY cluster has capacity for new replicas:")
+            commands.append(f"oc get nodes")
+            commands.append(f"oc describe nodes | grep -A 5 'Allocated resources'")
+            commands.append("")
+            commands.append("# 📚 OFFICIAL RED HAT DOCUMENTATION:")
+            commands.append("# - https://docs.openshift.com/container-platform/latest/nodes/pods/nodes-pods-autoscaling.html - HPA configuration")
+            commands.append("# - https://access.redhat.com/solutions/5478661 - HPA troubleshooting guide")
+            commands.append("# - https://access.redhat.com/solutions/5908131 - HPA not scaling troubleshooting")
+            commands.append("# - https://docs.openshift.com/container-platform/latest/nodes/clusters/nodes-cluster-limit-ranges.html - Resource limits")
+            commands.append("# - https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/ - HPA concepts")
 
         elif category == "cluster_operator_degraded":
             operator_name = evidence.get("operator_name", resource_name)
@@ -765,7 +942,15 @@ class SlackNotifier:
             evidence = diagnosis.evidence
             namespace = evidence.get("namespace", "cluster-wide")
             resource_kind = evidence.get("resource_kind", "unknown")
-            resource_name = evidence.get("resource_name", "unknown")
+
+            # Extract resource name with better fallbacks
+            resource_name = (
+                evidence.get("resource_name") or
+                evidence.get("pod_name") or
+                evidence.get("deployment_name") or
+                evidence.get("hpa_name") or
+                "unknown"
+            )
 
             # Build success message
             blocks = [
