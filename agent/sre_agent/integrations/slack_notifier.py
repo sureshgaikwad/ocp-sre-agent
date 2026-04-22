@@ -1001,10 +1001,10 @@ class SlackNotifier:
             ]
 
             # Add actions taken
-            if remediation_result.actions_taken:
+            if remediation_result.actions:
                 actions_text = "\n".join([
-                    f"• {action}"
-                    for action in remediation_result.actions_taken
+                    f"• {action.action_type}: {action.description}"
+                    for action in remediation_result.actions
                 ])
                 blocks.append({
                     "type": "section",

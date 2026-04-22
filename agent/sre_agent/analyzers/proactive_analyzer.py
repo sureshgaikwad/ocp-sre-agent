@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -140,14 +141,15 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Monitor after increase to verify trend stabilizes",
                 "Consider application-level optimization if trend continues"
             ],
-            evidence={
-                "current_percent": current_percent,
-                "time_to_limit_hours": time_to_limit_seconds / 3600 if time_to_limit_seconds else None,
-                "trend_slope": raw_data.get("trend_slope"),
-                "container": container,
-                "urgency": urgency,
-                "recommended_increase_factor": recommended_increase_factor
-            },
+            evidence=build_evidence(
+                    observation,
+                    "current_percent": current_percent,
+                    "time_to_limit_hours": time_to_limit_seconds / 3600 if time_to_limit_seconds else None,
+                    "trend_slope": raw_data.get("trend_slope"),
+                    "container": container,
+                    "urgency": urgency,
+                    "recommended_increase_factor": recommended_increase_factor
+                ),
             analyzer_name=self.analyzer_name
         )
 
@@ -194,13 +196,14 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Monitor CPU throttling metrics",
                 "Consider horizontal scaling (HPA) if trend continues"
             ],
-            evidence={
-                "current_percent": current_percent,
-                "trend_slope": raw_data.get("trend_slope"),
-                "container": container,
-                "urgency": urgency,
-                "recommended_increase_factor": recommended_increase_factor
-            },
+            evidence=build_evidence(
+                    observation,
+                    "current_percent": current_percent,
+                    "trend_slope": raw_data.get("trend_slope"),
+                    "container": container,
+                    "urgency": urgency,
+                    "recommended_increase_factor": recommended_increase_factor
+                ),
             analyzer_name=self.analyzer_name
         )
 
@@ -233,10 +236,11 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Check downstream service health",
                 "Verify rate limiting and circuit breaker configurations"
             ],
-            evidence={
-                "current_error_rate": current_error_rate,
-                "trend_slope": raw_data.get("trend_slope")
-            },
+            evidence=build_evidence(
+                    observation,
+                    "current_error_rate": current_error_rate,
+                    "trend_slope": raw_data.get("trend_slope")
+                ),
             analyzer_name=self.analyzer_name
         )
 
@@ -272,10 +276,11 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Check for external factors (traffic spikes, deployments)",
                 "Monitor for recurrence or escalation"
             ],
-            evidence={
-                "z_score": z_score,
-                "current_value": raw_data.get("current_value"),
-                "threshold_std": raw_data.get("threshold_std")
-            },
+            evidence=build_evidence(
+                    observation,
+                    "z_score": z_score,
+                    "current_value": raw_data.get("current_value"),
+                    "threshold_std": raw_data.get("threshold_std")
+                ),
             analyzer_name=self.analyzer_name
         )

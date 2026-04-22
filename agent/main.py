@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from contextlib import asynccontextmanager
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import litellm

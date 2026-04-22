@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -181,14 +182,14 @@ class CrashLoopAnalyzer(BaseAnalyzer):
                     "Add memory request for better scheduling",
                 ],
                 recommended_tier=1,  # Direct fix: increase memory limit
-                evidence={
-                    "exit_code": exit_code,
-                    "reason": reason,
-                    "memory_limit": memory_limit,
-                    "namespace": observation.namespace,
-                    "pod_name": observation.resource_name,
-                    "container_name": observation.raw_data.get("container_name"),
-                },
+                evidence=build_evidence(
+                    observation,
+                    exit_code=exit_code,
+                    reason=reason,
+                    memory_limit=memory_limit,
+                    pod_name=observation.resource_name,
+                    container_name=observation.raw_data.get("container_name"),
+                ),
                 exit_code=exit_code,
                 error_patterns=["OOMKilled", f"exit code {exit_code}"],
                 analyzer_name=self.analyzer_name,
@@ -207,10 +208,11 @@ class CrashLoopAnalyzer(BaseAnalyzer):
                     "Check application health endpoint",
                 ],
                 recommended_tier=2,  # GitOps PR to adjust probe
-                evidence={
-                    "exit_code": exit_code,
-                    "reason": reason,
-                },
+                evidence=build_evidence(
+                    observation,
+                    exit_code=exit_code,
+                    reason=reason,
+                ),
                 exit_code=exit_code,
                 error_patterns=["Liveness probe failed"],
                 analyzer_name=self.analyzer_name,
@@ -414,12 +416,13 @@ Respond with JSON:
                 confidence=confidence,
                 recommended_actions=analysis.get("recommended_actions", []),
                 recommended_tier=tier,
-                evidence={
-                    "exit_code": exit_code,
-                    "restart_count": restart_count,
-                    "llm_evidence": analysis.get("evidence", []),
-                    "logs_analyzed": True,
-                },
+                evidence=build_evidence(
+                    observation,
+                    exit_code=exit_code,
+                    restart_count=restart_count,
+                    llm_evidence=analysis.get("evidence", []),
+                    logs_analyzed=True,
+                ),
                 exit_code=exit_code,
                 error_patterns=analysis.get("evidence", []),
                 analyzer_name=self.analyzer_name,
@@ -460,10 +463,11 @@ Respond with JSON:
                 "Check resource limits and requests",
             ],
             recommended_tier=3,  # Notification
-            evidence={
-                "exit_code": exit_code,
-                "restart_count": restart_count,
-            },
+            evidence=build_evidence(
+                observation,
+                exit_code=exit_code,
+                restart_count=restart_count,
+            ),
             exit_code=exit_code,
             analyzer_name=self.analyzer_name,
         )

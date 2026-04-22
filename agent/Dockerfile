@@ -4,10 +4,10 @@ FROM registry.access.redhat.com/ubi9/python-311:latest
 
 LABEL maintainer="SRE Team" \
       description="OpenShift SRE Agent - Autonomous monitoring and remediation" \
-      version="2.0.2" \
+      version="2.1.0" \
       io.k8s.description="Autonomous SRE agent for OpenShift cluster monitoring and remediation" \
       io.k8s.display-name="OpenShift SRE Agent" \
-      io.openshift.tags="openshift,sre,monitoring,remediation,multi-git"
+      io.openshift.tags="openshift,sre,monitoring,remediation,multi-git,learning"
 
 # Switch to root for installations
 USER 0

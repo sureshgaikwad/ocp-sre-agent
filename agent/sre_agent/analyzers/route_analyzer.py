@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -88,7 +89,10 @@ class RouteAnalyzer(BaseAnalyzer):
                     root_cause="Route has no backend service configured",
                     confidence=Confidence.HIGH,
                     tier=3,
-                    evidence={"route_spec": spec}
+                    evidence=build_evidence(
+                    observation,
+                    "route_spec": spec
+                )
                 )
 
             # Check if route is admitted
@@ -105,7 +109,10 @@ class RouteAnalyzer(BaseAnalyzer):
                         "Verify route configuration",
                         "Check for router selectors matching route labels"
                     ],
-                    evidence={"route_status": status}
+                    evidence=build_evidence(
+                    observation,
+                    "route_status": status
+                )
                 )
 
             # Check for TLS issues
@@ -133,7 +140,10 @@ class RouteAnalyzer(BaseAnalyzer):
                     "Wait for backend pods to become ready",
                     "Check service endpoint status"
                 ],
-                evidence={"service": service_name, "route_spec": spec}
+                evidence=build_evidence(
+                    observation,
+                    "service": service_name, "route_spec": spec
+                )
             )
 
         except Exception as e:
@@ -226,11 +236,12 @@ class RouteAnalyzer(BaseAnalyzer):
                         "Check pod status for selector: " + str(selector),
                         "Verify pod readiness probes"
                     ],
-                    evidence={
-                        "service": service_name,
-                        "endpoints": endpoints_data,
-                        "selector": selector
-                    }
+                    evidence=build_evidence(
+                    observation,
+                    "service": service_name,
+                    "endpoints": endpoints_data,
+                    "selector": selector
+                )
                 )
 
         except NotImplementedError as e:
@@ -292,7 +303,10 @@ class RouteAnalyzer(BaseAnalyzer):
                         "Provide TLS certificate and key in route configuration",
                         "Or configure route to use default ingress certificate"
                     ],
-                    evidence={"tls_config": tls_config}
+                    evidence=build_evidence(
+                    observation,
+                    "tls_config": tls_config
+                )
                 )
 
         # Note: Actual certificate expiry checking would require parsing the cert

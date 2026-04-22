@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -318,10 +319,11 @@ Tier guide:
                 confidence=confidence,
                 recommended_actions=analysis.get("recommended_actions", []),
                 recommended_tier=tier,
-                evidence={
+                evidence=build_evidence(
+                    observation,
                     "llm_analysis": True,
-                    "llm_evidence": analysis.get("evidence", []),
-                },
+                    "llm_evidence": analysis.get("evidence", [])
+                ),
                 error_patterns=analysis.get("evidence", []),
                 analyzer_name=self.analyzer_name,
             )

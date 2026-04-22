@@ -650,7 +650,7 @@ class UnknownIssueHandler(BaseAnalyzer):
                 confidence=Confidence.LOW,
                 recommended_tier=3,
                 analyzer_name="unknown_issue_handler",
-                evidence={}
+                evidence=build_evidence(observation)
             )
 
             # Search KB

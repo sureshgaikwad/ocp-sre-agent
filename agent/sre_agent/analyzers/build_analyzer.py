@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -258,11 +259,12 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Increase CPU requests/limits",
                         "Add more disk space for build workspace"
                     ],
-                    evidence={
-                        "failure_reason": failure_reason,
-                        "failure_message": failure_message,
-                        "logs_snippet": logs[:500] if logs else None
-                    }
+                    evidence=build_evidence(
+                    observation,
+                    "failure_reason": failure_reason,
+                    "failure_message": failure_message,
+                    "logs_snippet": logs[:500] if logs else None
+                )
                 )
 
         # Check for timeouts (Tier 2 - can fix with config)
@@ -284,10 +286,11 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Optimize build steps to reduce execution time",
                         "Check for hanging processes in build"
                     ],
-                    evidence={
-                        "failure_reason": failure_reason,
-                        "failure_message": failure_message
-                    }
+                    evidence=build_evidence(
+                    observation,
+                    "failure_reason": failure_reason,
+                    "failure_message": failure_message
+                )
                 )
 
         # Check for test failures (Tier 3 - code issue)
@@ -309,11 +312,12 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Fix failing test cases",
                         "Check for environment-specific test issues"
                     ],
-                    evidence={
-                        "failure_reason": failure_reason,
-                        "failure_message": failure_message,
-                        "logs_snippet": logs[:1000] if logs else None
-                    }
+                    evidence=build_evidence(
+                    observation,
+                    "failure_reason": failure_reason,
+                    "failure_message": failure_message,
+                    "logs_snippet": logs[:1000] if logs else None
+                )
                 )
 
         # Check for compilation errors (Tier 3 - code issue)
@@ -335,11 +339,12 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Fix syntax or dependency errors",
                         "Check for missing dependencies"
                     ],
-                    evidence={
-                        "failure_reason": failure_reason,
-                        "failure_message": failure_message,
-                        "logs_snippet": logs[:1000] if logs else None
-                    }
+                    evidence=build_evidence(
+                    observation,
+                    "failure_reason": failure_reason,
+                    "failure_message": failure_message,
+                    "logs_snippet": logs[:1000] if logs else None
+                )
                 )
 
         # Unknown build failure (Tier 3 - needs manual review)
@@ -359,11 +364,12 @@ class BuildAnalyzer(BaseAnalyzer):
                 "Check build configuration",
                 "Verify dependencies and build environment"
             ],
-            evidence={
-                "failure_reason": failure_reason,
-                "failure_message": failure_message,
-                "logs_snippet": logs[:1000] if logs else None
-            }
+            evidence=build_evidence(
+                    observation,
+                    "failure_reason": failure_reason,
+                    "failure_message": failure_message,
+                    "logs_snippet": logs[:1000] if logs else None
+                )
         )
 
     async def _get_pipelinerun_logs(self, namespace: str, pipelinerun_name: str) -> str:

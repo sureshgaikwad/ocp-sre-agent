@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -169,11 +170,12 @@ class NetworkingAnalyzer(BaseAnalyzer):
                     "Verify DNS operator configuration",
                     "Check node resources where DNS pods are scheduled"
                 ],
-                evidence={
+                evidence=build_evidence(
+                    observation,
                     "pod_phase": phase,
                     "pod_status": status,
                     "logs_snippet": logs[:500] if logs else None
-                }
+                )
             )
         else:
             # DNS pod running but might have issues
@@ -188,9 +190,10 @@ class NetworkingAnalyzer(BaseAnalyzer):
                     "Verify upstream DNS servers",
                     "Check CoreDNS configuration"
                 ],
-                evidence={
+                evidence=build_evidence(
+                    observation,
                     "logs_snippet": logs[:500] if logs else None
-                }
+                )
             )
 
     async def _analyze_sdn_failure(
@@ -237,12 +240,13 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 "Check for OVS/kernel module issues on affected nodes",
                 "Restart network pods if safe to do so"
             ],
-            evidence={
-                "pod_phase": phase,
-                "pod_status": status,
-                "network_plugin": network_plugin,
-                "logs_snippet": logs[:500] if logs else None
-            }
+            evidence=build_evidence(
+                    observation,
+                    "pod_phase": phase,
+                    "pod_status": status,
+                    "network_plugin": network_plugin,
+                    "logs_snippet": logs[:500] if logs else None
+                )
         )
 
     async def _analyze_network_policy(
@@ -272,10 +276,11 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 "Verify pod labels match policy selectors",
                 "Test connectivity with a temporary allow-all policy (for debugging only)"
             ],
-            evidence={
-                "observation_message": observation.message,
-                "namespace": observation.namespace
-            }
+            evidence=build_evidence(
+                    observation,
+                    "observation_message": observation.message,
+                    "namespace": observation.namespace
+                )
         )
 
     async def _analyze_service_endpoints(
@@ -305,10 +310,11 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 "Scale deployment if needed",
                 "Check for NetworkPolicy blocking health checks"
             ],
-            evidence={
-                "observation_message": observation.message,
-                "namespace": observation.namespace
-            }
+            evidence=build_evidence(
+                    observation,
+                    "observation_message": observation.message,
+                    "namespace": observation.namespace
+                )
         )
 
     async def _get_pod_logs(

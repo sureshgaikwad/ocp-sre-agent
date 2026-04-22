@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from mcp_client import MCPToolRegistry
 
 from sre_agent.analyzers.base import BaseAnalyzer
+from sre_agent.analyzers.evidence_builder import build_evidence
 from sre_agent.models.observation import Observation, ObservationType
 from sre_agent.models.diagnosis import Diagnosis, DiagnosisCategory, Confidence
 from sre_agent.utils.json_logger import get_logger
@@ -221,11 +222,12 @@ class ImagePullAnalyzer(BaseAnalyzer):
                 "Check registry status page",
             ],
             recommended_tier=1,  # Automated retry-wait
-            evidence={
-                "image": image_name,
-                "error_message": error_message[:500],
-                "matched_patterns": evidence,
-            },
+            evidence=build_evidence(
+                observation,
+                image=image_name,
+                error_message=error_message[:500],
+                matched_patterns=evidence,
+            ),
             error_patterns=evidence,
             analyzer_name=self.analyzer_name,
         )
@@ -250,11 +252,12 @@ class ImagePullAnalyzer(BaseAnalyzer):
                 "Verify image repository permissions",
             ],
             recommended_tier=3,  # Notification - manual fix required
-            evidence={
-                "image": image_name,
-                "error_message": error_message[:500],
-                "matched_patterns": evidence,
-            },
+            evidence=build_evidence(
+                observation,
+                image=image_name,
+                error_message=error_message[:500],
+                matched_patterns=evidence,
+            ),
             error_patterns=evidence,
             analyzer_name=self.analyzer_name,
         )
@@ -279,11 +282,12 @@ class ImagePullAnalyzer(BaseAnalyzer):
                 "Verify registry URL is correct",
             ],
             recommended_tier=3,  # Notification - manual fix required
-            evidence={
-                "image": image_name,
-                "error_message": error_message[:500],
-                "matched_patterns": evidence,
-            },
+            evidence=build_evidence(
+                observation,
+                image=image_name,
+                error_message=error_message[:500],
+                matched_patterns=evidence,
+            ),
             error_patterns=evidence,
             analyzer_name=self.analyzer_name,
         )
