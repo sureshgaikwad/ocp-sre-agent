@@ -192,15 +192,15 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                         "oc logs -n openshift-monitoring -l app=metrics-server --tail=50"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "hpa_name": observation.resource_name,
-                    "hpa_status": status,
-                    "hpa_spec": spec,
-                    "message": observation.message,
-                    "target_kind": target_kind,
-                    "target_name": target_name,
-                    "scale_target_ref": scale_target_ref
-                )
+                        observation,
+                        hpa_name=observation.resource_name,
+                        hpa_status=status,
+                        hpa_spec=spec,
+                        message=observation.message,
+                        target_kind=target_kind,
+                        target_name=target_name,
+                        scale_target_ref=scale_target_ref
+                    )
                 )
 
         # Check for missing scale target
@@ -238,12 +238,12 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                         f"oc get events -n {observation.namespace} --sort-by='.lastTimestamp' | grep {target_name}"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "hpa_name": observation.resource_name,
-                    "scale_target_ref": scale_target_ref,
-                    "target_kind": target_kind,
-                    "target_name": target_name
-                )
+                        observation,
+                        hpa_name=observation.resource_name,
+                        scale_target_ref=scale_target_ref,
+                        target_kind=target_kind,
+                        target_name=target_name
+                    )
                 )
 
         # Check if HPA is at max replicas
@@ -294,14 +294,14 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                 ],
                 evidence=build_evidence(
                     observation,
-                    "hpa_name": observation.resource_name,  # Add HPA name explicitly,
-                    "current_replicas": current_replicas,
-                    "max_replicas": max_replicas,
-                    "min_replicas": min_replicas,
-                    "cpu_utilization": cpu_utilization,
-                    "target_cpu": target_cpu,
-                    "current_metrics": current_metrics,
-                    "desired_replicas": status.get("desiredReplicas", current_replicas)
+                    hpa_name=observation.resource_name,  # Add HPA name explicitly
+                    current_replicas=current_replicas,
+                    max_replicas=max_replicas,
+                    min_replicas=min_replicas,
+                    cpu_utilization=cpu_utilization,
+                    target_cpu=target_cpu,
+                    current_metrics=current_metrics,
+                    desired_replicas=status.get("desiredReplicas", current_replicas)
                 )
             )
 
@@ -318,10 +318,10 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                 "Verify target deployment/statefulset exists and is healthy"
             ],
             evidence=build_evidence(
-                    observation,
-                    "hpa_status": status,
-                    "observation_message": observation.message
-                )
+                observation,
+                hpa_status=status,
+                observation_message=observation.message
+            )
         )
 
     async def _analyze_cluster_autoscaler_issue(
@@ -374,10 +374,10 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                         "Verify cloud provider credentials and permissions"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "autoscaler_status": status,
-                    "message": observation.message
-                )
+                        observation,
+                        autoscaler_status=status,
+                        message=observation.message
+                    )
                 )
 
         # Generic ClusterAutoscaler issue (Tier 3)
@@ -394,10 +394,10 @@ class AutoscalingAnalyzer(BaseAnalyzer):
                 "Review autoscaler logs for detailed errors"
             ],
             evidence=build_evidence(
-                    observation,
-                    "autoscaler_status": status,
-                    "observation_message": observation.message
-                )
+                observation,
+                autoscaler_status=status,
+                observation_message=observation.message
+            )
         )
 
     def _create_diagnosis(

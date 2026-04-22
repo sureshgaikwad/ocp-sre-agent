@@ -90,9 +90,9 @@ class RouteAnalyzer(BaseAnalyzer):
                     confidence=Confidence.HIGH,
                     tier=3,
                     evidence=build_evidence(
-                    observation,
-                    "route_spec": spec
-                )
+                        observation,
+                        route_spec=spec
+                    )
                 )
 
             # Check if route is admitted
@@ -110,9 +110,9 @@ class RouteAnalyzer(BaseAnalyzer):
                         "Check for router selectors matching route labels"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "route_status": status
-                )
+                        observation,
+                        route_status=status
+                    )
                 )
 
             # Check for TLS issues
@@ -142,7 +142,8 @@ class RouteAnalyzer(BaseAnalyzer):
                 ],
                 evidence=build_evidence(
                     observation,
-                    "service": service_name, "route_spec": spec
+                    service=service_name,
+                    route_spec=spec
                 )
             )
 
@@ -237,11 +238,11 @@ class RouteAnalyzer(BaseAnalyzer):
                         "Verify pod readiness probes"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "service": service_name,
-                    "endpoints": endpoints_data,
-                    "selector": selector
-                )
+                        observation,
+                        service=service_name,
+                        endpoints=endpoints_data,
+                        selector=selector
+                    )
                 )
 
         except NotImplementedError as e:
@@ -304,9 +305,9 @@ class RouteAnalyzer(BaseAnalyzer):
                         "Or configure route to use default ingress certificate"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "tls_config": tls_config
-                )
+                        observation,
+                        tls_config=tls_config
+                    )
                 )
 
         # Note: Actual certificate expiry checking would require parsing the cert

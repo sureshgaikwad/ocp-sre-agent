@@ -142,14 +142,14 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Consider application-level optimization if trend continues"
             ],
             evidence=build_evidence(
-                    observation,
-                    "current_percent": current_percent,
-                    "time_to_limit_hours": time_to_limit_seconds / 3600 if time_to_limit_seconds else None,
-                    "trend_slope": raw_data.get("trend_slope"),
-                    "container": container,
-                    "urgency": urgency,
-                    "recommended_increase_factor": recommended_increase_factor
-                ),
+                observation,
+                current_percent=current_percent,
+                time_to_limit_hours=time_to_limit_seconds / 3600 if time_to_limit_seconds else None,
+                trend_slope=raw_data.get("trend_slope"),
+                container=container,
+                urgency=urgency,
+                recommended_increase_factor=recommended_increase_factor
+            ),
             analyzer_name=self.analyzer_name
         )
 
@@ -197,13 +197,13 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Consider horizontal scaling (HPA) if trend continues"
             ],
             evidence=build_evidence(
-                    observation,
-                    "current_percent": current_percent,
-                    "trend_slope": raw_data.get("trend_slope"),
-                    "container": container,
-                    "urgency": urgency,
-                    "recommended_increase_factor": recommended_increase_factor
-                ),
+                observation,
+                current_percent=current_percent,
+                trend_slope=raw_data.get("trend_slope"),
+                container=container,
+                urgency=urgency,
+                recommended_increase_factor=recommended_increase_factor
+            ),
             analyzer_name=self.analyzer_name
         )
 
@@ -237,10 +237,10 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Verify rate limiting and circuit breaker configurations"
             ],
             evidence=build_evidence(
-                    observation,
-                    "current_error_rate": current_error_rate,
-                    "trend_slope": raw_data.get("trend_slope")
-                ),
+                observation,
+                current_error_rate=current_error_rate,
+                trend_slope=raw_data.get("trend_slope")
+            ),
             analyzer_name=self.analyzer_name
         )
 
@@ -277,10 +277,10 @@ class ProactiveAnalyzer(BaseAnalyzer):
                 "Monitor for recurrence or escalation"
             ],
             evidence=build_evidence(
-                    observation,
-                    "z_score": z_score,
-                    "current_value": raw_data.get("current_value"),
-                    "threshold_std": raw_data.get("threshold_std")
-                ),
+                observation,
+                z_score=z_score,
+                current_value=raw_data.get("current_value"),
+                threshold_std=raw_data.get("threshold_std")
+            ),
             analyzer_name=self.analyzer_name
         )

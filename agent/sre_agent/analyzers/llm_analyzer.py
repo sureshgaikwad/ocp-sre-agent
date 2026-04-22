@@ -321,8 +321,8 @@ Tier guide:
                 recommended_tier=tier,
                 evidence=build_evidence(
                     observation,
-                    "llm_analysis": True,
-                    "llm_evidence": analysis.get("evidence", [])
+                    llm_analysis=True,
+                    llm_evidence=analysis.get("evidence", [])
                 ),
                 error_patterns=analysis.get("evidence", []),
                 analyzer_name=self.analyzer_name,

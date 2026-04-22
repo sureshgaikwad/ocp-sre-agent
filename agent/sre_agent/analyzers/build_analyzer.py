@@ -260,11 +260,11 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Add more disk space for build workspace"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "failure_reason": failure_reason,
-                    "failure_message": failure_message,
-                    "logs_snippet": logs[:500] if logs else None
-                )
+                        observation,
+                        failure_reason=failure_reason,
+                        failure_message=failure_message,
+                        logs_snippet=logs[:500] if logs else None
+                    )
                 )
 
         # Check for timeouts (Tier 2 - can fix with config)
@@ -287,10 +287,10 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Check for hanging processes in build"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "failure_reason": failure_reason,
-                    "failure_message": failure_message
-                )
+                        observation,
+                        failure_reason=failure_reason,
+                        failure_message=failure_message
+                    )
                 )
 
         # Check for test failures (Tier 3 - code issue)
@@ -313,11 +313,11 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Check for environment-specific test issues"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "failure_reason": failure_reason,
-                    "failure_message": failure_message,
-                    "logs_snippet": logs[:1000] if logs else None
-                )
+                        observation,
+                        failure_reason=failure_reason,
+                        failure_message=failure_message,
+                        logs_snippet=logs[:1000] if logs else None
+                    )
                 )
 
         # Check for compilation errors (Tier 3 - code issue)
@@ -340,11 +340,11 @@ class BuildAnalyzer(BaseAnalyzer):
                         "Check for missing dependencies"
                     ],
                     evidence=build_evidence(
-                    observation,
-                    "failure_reason": failure_reason,
-                    "failure_message": failure_message,
-                    "logs_snippet": logs[:1000] if logs else None
-                )
+                        observation,
+                        failure_reason=failure_reason,
+                        failure_message=failure_message,
+                        logs_snippet=logs[:1000] if logs else None
+                    )
                 )
 
         # Unknown build failure (Tier 3 - needs manual review)
@@ -365,11 +365,11 @@ class BuildAnalyzer(BaseAnalyzer):
                 "Verify dependencies and build environment"
             ],
             evidence=build_evidence(
-                    observation,
-                    "failure_reason": failure_reason,
-                    "failure_message": failure_message,
-                    "logs_snippet": logs[:1000] if logs else None
-                )
+                observation,
+                failure_reason=failure_reason,
+                failure_message=failure_message,
+                logs_snippet=logs[:1000] if logs else None
+            )
         )
 
     async def _get_pipelinerun_logs(self, namespace: str, pipelinerun_name: str) -> str:

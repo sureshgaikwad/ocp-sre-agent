@@ -172,9 +172,9 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 ],
                 evidence=build_evidence(
                     observation,
-                    "pod_phase": phase,
-                    "pod_status": status,
-                    "logs_snippet": logs[:500] if logs else None
+                    pod_phase=phase,
+                    pod_status=status,
+                    logs_snippet=logs[:500] if logs else None
                 )
             )
         else:
@@ -192,7 +192,7 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 ],
                 evidence=build_evidence(
                     observation,
-                    "logs_snippet": logs[:500] if logs else None
+                    logs_snippet=logs[:500] if logs else None
                 )
             )
 
@@ -241,12 +241,12 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 "Restart network pods if safe to do so"
             ],
             evidence=build_evidence(
-                    observation,
-                    "pod_phase": phase,
-                    "pod_status": status,
-                    "network_plugin": network_plugin,
-                    "logs_snippet": logs[:500] if logs else None
-                )
+                observation,
+                pod_phase=phase,
+                pod_status=status,
+                network_plugin=network_plugin,
+                logs_snippet=logs[:500] if logs else None
+            )
         )
 
     async def _analyze_network_policy(
@@ -277,10 +277,10 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 "Test connectivity with a temporary allow-all policy (for debugging only)"
             ],
             evidence=build_evidence(
-                    observation,
-                    "observation_message": observation.message,
-                    "namespace": observation.namespace
-                )
+                observation,
+                observation_message=observation.message,
+                namespace=observation.namespace
+            )
         )
 
     async def _analyze_service_endpoints(
@@ -311,10 +311,10 @@ class NetworkingAnalyzer(BaseAnalyzer):
                 "Check for NetworkPolicy blocking health checks"
             ],
             evidence=build_evidence(
-                    observation,
-                    "observation_message": observation.message,
-                    "namespace": observation.namespace
-                )
+                observation,
+                observation_message=observation.message,
+                namespace=observation.namespace
+            )
         )
 
     async def _get_pod_logs(
